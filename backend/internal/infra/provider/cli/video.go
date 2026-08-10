@@ -153,6 +153,13 @@ func boundDiagnosticText(value string, limit int) string {
 // 显式模式优先；auto 下仅已确认 Super 且 bot_flag_source/bfs 为 1 或 2 默认使用 XAI。
 // 其他 auto Super 账号仅在当次 Build 创建返回 403 后探测 XAI。
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
+	// Normalize official first-frame field onto ReferenceURLs for the existing single-image Build payload.
+	if first := strings.TrimSpace(request.FirstFrameURL); first != "" {
+		if len(request.ReferenceURLs) > 0 {
+			return provider.VideoResult{}, fmt.Errorf("Build 不支持同时使用 image 与 reference_images")
+		}
+		request.ReferenceURLs = []string{first}
+	}
 	if len(request.ReferenceURLs) > buildVideoMaxImages {
 		return provider.VideoResult{}, fmt.Errorf("Build grok-imagine-video-1.5 最多支持 1 张首图，当前为 %d 张", len(request.ReferenceURLs))
 	}

@@ -219,8 +219,13 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	}
 	defer lease.Release()
 	parentID := ""
-	references := make([]string, 0, len(request.ReferenceURLs))
-	for _, rawReference := range request.ReferenceURLs {
+	rawReferences := request.ReferenceURLs
+	if first := strings.TrimSpace(request.FirstFrameURL); first != "" {
+		// Image-to-video: Web path still uploads a single media parent from the first frame.
+		rawReferences = []string{first}
+	}
+	references := make([]string, 0, len(rawReferences))
+	for _, rawReference := range rawReferences {
 		reference, referenceErr := a.prepareVideoReference(ctx, cfg, lease, token, rawReference)
 		if referenceErr != nil {
 			return provider.VideoResult{}, referenceErr

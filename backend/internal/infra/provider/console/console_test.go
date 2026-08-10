@@ -52,6 +52,7 @@ func TestCatalogContainsAllConsoleModelsAndAliases(t *testing.T) {
 		{publicID: "Console/grok-imagine-image", capability: modeldomain.CapabilityImage}:               "grok-imagine-image",
 		{publicID: "Console/grok-imagine-image", capability: modeldomain.CapabilityImageEdit}:           "grok-imagine-image",
 		{publicID: "Console/grok-imagine-video", capability: modeldomain.CapabilityVideo}:               "grok-imagine-video",
+		{publicID: "Console/grok-imagine-video-1.5", capability: modeldomain.CapabilityVideo}:           "grok-imagine-video-1.5",
 	}
 	routes := Routes()
 	if len(routes) != len(expected) {
@@ -91,7 +92,7 @@ func TestCatalogContainsAllConsoleModelsAndAliases(t *testing.T) {
 	adapter := NewAdapter(Config{}, nil, nil, nil)
 	for model, want := range map[string]string{
 		"grok-4.5": QuotaMode, "grok-imagine-image-quality": QuotaModeImage,
-		"grok-imagine-image": QuotaModeImage, "grok-imagine-video": QuotaModeVideo,
+		"grok-imagine-image": QuotaModeImage, "grok-imagine-video": QuotaModeVideo, "grok-imagine-video-1.5": QuotaModeVideo,
 	} {
 		if got := adapter.QuotaMode(model); got != want {
 			t.Fatalf("QuotaMode(%q) = %q, want %q", model, got, want)
@@ -1256,13 +1257,76 @@ func TestConsoleVideoCreatesAndPollsStandardResources(t *testing.T) {
 	progress := 0
 	result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
 		Credential: credential, Prompt: "animate", Duration: 6, AspectRatio: "16:9", Resolution: "720p",
-		Progress: func(value int) { progress = value },
+		UpstreamModel: "grok-imagine-video",
+		Progress:      func(value int) { progress = value },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.URL != "https://vidgen.x.ai/result.mp4" || result.ContentType != "video/mp4" || progress != 99 {
 		t.Fatalf("video result = %#v, progress = %d", result, progress)
+	}
+}
+
+func TestConsoleVideoSendsReferenceImagesAndFirstFrameSeparately(t *testing.T) {
+	var got map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if serveTestDPoPToken(t, writer, request) {
+			return
+		}
+		verifyTestDPoPProof(t, request)
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/videos/generations":
+			if err := json.NewDecoder(request.Body).Decode(&got); err != nil {
+				t.Error(err)
+			}
+			_, _ = writer.Write([]byte(`{"request_id":"upstream-video-ref"}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/videos/upstream-video-ref":
+			_, _ = writer.Write([]byte(`{"status":"done","progress":100,"video":{"url":"https://vidgen.x.ai/ref.mp4"}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	adapter, credential := newConsoleTestAdapter(t, server.URL)
+	_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Prompt: "style mix", Duration: 6, Resolution: "720p",
+		UpstreamModel:  "grok-imagine-video-1.5",
+		ReferenceURLs:  []string{"https://cdn.example.com/a.png", "https://cdn.example.com/b.png"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["model"] != "grok-imagine-video-1.5" {
+		t.Fatalf("model = %#v", got["model"])
+	}
+	if got["image"] != nil {
+		t.Fatalf("image should be absent for R2V, got %#v", got["image"])
+	}
+	refs, _ := got["reference_images"].([]any)
+	if len(refs) != 2 {
+		t.Fatalf("reference_images = %#v", got["reference_images"])
+	}
+
+	got = nil
+	_, err = adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Prompt: "animate still", Duration: 6, Resolution: "1080p",
+		UpstreamModel:  "grok-imagine-video-1.5",
+		FirstFrameURL:  "https://cdn.example.com/first.png",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["reference_images"] != nil {
+		t.Fatalf("reference_images should be absent for I2V, got %#v", got["reference_images"])
+	}
+	image, _ := got["image"].(map[string]any)
+	if image["url"] != "https://cdn.example.com/first.png" {
+		t.Fatalf("image = %#v", got["image"])
+	}
+	if got["resolution"] != "1080p" {
+		t.Fatalf("resolution = %#v", got["resolution"])
 	}
 }
 

@@ -278,12 +278,19 @@ type VideoRequest struct {
 	// Billing is used only to determine XAI eligibility in Build auto mode; nil means the account tier is unknown.
 	Billing *account.Billing
 	// JobID binds the local video job to XAI ZDR upload tickets and result assets.
-	JobID         string
-	Prompt        string
-	Duration      int
-	AspectRatio   string
-	Resolution    string
+	JobID string
+	Prompt string
+	Duration int
+	AspectRatio string
+	Resolution string
+	// FirstFrameURL is the optional image-to-video starting frame (official `image.url`).
+	// Mutually exclusive with ReferenceURLs at the HTTP layer.
+	FirstFrameURL string
+	// ReferenceURLs are reference-to-video guides (official `reference_images`).
+	// They must not be confused with FirstFrameURL.
 	ReferenceURLs []string
+	// UpstreamModel is the provider-facing model id (e.g. grok-imagine-video-1.5).
+	UpstreamModel string
 	Progress      func(int)
 }
 

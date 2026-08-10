@@ -223,19 +223,19 @@ Mode            generate | edit | extend
 
 - [x] 计划文档  
 - [x] GitHub fork：`qq330335245/grok2api` ← `chenyme/grok2api`  
-- [ ] 开发分支：`feat/console-video-official-capabilities`  
+- [x] 开发分支：`feat/console-video-official-capabilities`  
 - [ ] CI 本地：`go test` 相关包可跑  
 
 ### Phase 1 — 生成路径语义修复（P0-1,2,3）
 
-1. Handler：解析并互斥校验 `image` / `reference_images`  
-2. Gateway / job 输入结构升级 + 迁移兼容  
-3. Console `GenerateVideo`：  
+1. [x] Handler：解析并互斥校验 `image` / `reference_images`  
+2. [x] Gateway / job 输入结构升级 + 迁移兼容  
+3. [x] Console `GenerateVideo`：  
    - 多参考  
    - 正确字段  
    - 1.5 模型与分辨率  
-4. Catalog / model routes：Console 1.5  
-5. 单测 + 手动旁路回归清单  
+4. [x] Catalog / model routes：Console 1.5  
+5. [x] 相关单测（console/gateway/inference/cli/web）  
 
 ### Phase 2 — edits / extensions（P0-4,5）
 

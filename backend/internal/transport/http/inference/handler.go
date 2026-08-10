@@ -652,33 +652,34 @@ func (h *Handler) generateVideo(c *gin.Context) {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "resolution 必须是 480p、720p 或 1080p")
 		return
 	}
-	inputs := append([]videoGenerationImage(nil), request.ReferenceImages...)
-	if request.Image != nil {
-		inputs = append([]videoGenerationImage{*request.Image}, inputs...)
-	}
-	if len(inputs) > mediadomain.MaxInputImages {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("image 与 reference_images 合计不能超过 %d 张", mediadomain.MaxInputImages))
+	// Official xAI rule: image (I2V first frame) and reference_images (R2V) are mutually exclusive.
+	if request.Image != nil && len(request.ReferenceImages) > 0 {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "image 与 reference_images 不能同时使用，请二选一")
 		return
 	}
-	referenceURLs := make([]string, 0, len(inputs))
-	for _, input := range inputs {
-		urlValue := strings.TrimSpace(input.URL)
-		fileID := strings.TrimSpace(input.FileID)
-		if (urlValue == "") == (fileID == "") {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "每个 image 必须且只能提供 url 或 file_id")
+	if len(request.ReferenceImages) > mediadomain.MaxInputImages {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("reference_images 不能超过 %d 张", mediadomain.MaxInputImages))
+		return
+	}
+	firstFrameURL := ""
+	if request.Image != nil {
+		resolved, err := resolveVideoGenerationImage(*request.Image)
+		if err != nil {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		if fileID != "" {
-			if !mediadomain.IsInputAssetID(fileID) {
-				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "image.file_id 无效")
-				return
-			}
-			referenceURLs = append(referenceURLs, gateway.VideoInputFileReference(fileID))
-		} else {
-			referenceURLs = append(referenceURLs, urlValue)
-		}
+		firstFrameURL = resolved
 	}
-	if prompt == "" && len(referenceURLs) == 0 {
+	referenceURLs := make([]string, 0, len(request.ReferenceImages))
+	for _, input := range request.ReferenceImages {
+		resolved, err := resolveVideoGenerationImage(input)
+		if err != nil {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		referenceURLs = append(referenceURLs, resolved)
+	}
+	if prompt == "" && firstFrameURL == "" && len(referenceURLs) == 0 {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "文本生视频必须提供 prompt；图片生视频可以省略 prompt")
 		return
 	}
@@ -689,7 +690,7 @@ func (h *Handler) generateVideo(c *gin.Context) {
 	job, err := h.gateway.CreateVideo(c.Request.Context(), gateway.VideoInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model,
 		Prompt: prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
-		ReferenceURLs: referenceURLs,
+		FirstFrameURL: firstFrameURL, ReferenceURLs: referenceURLs,
 	})
 	if err != nil {
 		writeGatewayError(c, err)
@@ -774,6 +775,21 @@ func parseVideoDuration(durationRaw json.RawMessage) (int, error) {
 		return 0, fmt.Errorf("duration 必须在 1 到 15 秒之间")
 	}
 	return value, nil
+}
+
+func resolveVideoGenerationImage(input videoGenerationImage) (string, error) {
+	urlValue := strings.TrimSpace(input.URL)
+	fileID := strings.TrimSpace(input.FileID)
+	if (urlValue == "") == (fileID == "") {
+		return "", errors.New("每个 image 必须且只能提供 url 或 file_id")
+	}
+	if fileID != "" {
+		if !mediadomain.IsInputAssetID(fileID) {
+			return "", errors.New("image.file_id 无效")
+		}
+		return gateway.VideoInputFileReference(fileID), nil
+	}
+	return urlValue, nil
 }
 
 func parseOptionalVideoInteger(raw json.RawMessage) (int, bool, error) {

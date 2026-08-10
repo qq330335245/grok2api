@@ -40,13 +40,16 @@ func VideoInputFileReference(fileID string) string {
 }
 
 type VideoInput struct {
-	RequestID     string
-	ClientKey     clientkey.Key
-	PublicModel   string
-	Prompt        string
-	Duration      int
-	AspectRatio   string
-	Resolution    string
+	RequestID   string
+	ClientKey   clientkey.Key
+	PublicModel string
+	Prompt      string
+	Duration    int
+	AspectRatio string
+	Resolution  string
+	// FirstFrameURL maps to official image-to-video `image` (at most one).
+	FirstFrameURL string
+	// ReferenceURLs maps to official `reference_images` only.
 	ReferenceURLs []string
 }
 
@@ -54,13 +57,22 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if s.mediaJobs == nil || s.mediaQueue == nil {
 		return media.Job{}, fmt.Errorf("视频任务服务未配置")
 	}
-	if len(input.Prompt) > 100000 || (len(input.Prompt) == 0 && len(input.ReferenceURLs) == 0) {
+	firstFrame := strings.TrimSpace(input.FirstFrameURL)
+	references := trimVideoURLList(input.ReferenceURLs)
+	if firstFrame != "" && len(references) > 0 {
+		return media.Job{}, fmt.Errorf("image 与 reference_images 不能同时使用")
+	}
+	if len(input.Prompt) > 100000 || (len(input.Prompt) == 0 && firstFrame == "" && len(references) == 0) {
 		return media.Job{}, fmt.Errorf("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
 	}
-	if err := s.validateVideoInputReferences(ctx, input.ReferenceURLs); err != nil {
+	allRefs := references
+	if firstFrame != "" {
+		allRefs = []string{firstFrame}
+	}
+	if err := s.validateVideoInputReferences(ctx, allRefs); err != nil {
 		return media.Job{}, err
 	}
-	inputJSON, err := encodeVideoInput(input.ReferenceURLs)
+	inputJSON, err := encodeVideoJobInput(videoJobInput{FirstFrameURL: firstFrame, ReferenceURLs: references})
 	if err != nil {
 		return media.Job{}, err
 	}
@@ -97,7 +109,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		AccountID: accountID, AccountName: lease.Credential.Name,
 		Provider: string(route.Provider), Model: externalModel, ModelRouteID: route.ID, UpstreamModel: model.DisplayUpstreamModel(route.Provider, route.UpstreamModel), Prompt: input.Prompt,
 		Seconds: input.Duration, Size: input.AspectRatio, Quality: input.Resolution,
-		Status: media.StatusQueued, Progress: 0, InputJSON: inputJSON, InputImageCount: len(input.ReferenceURLs), CreatedAt: now, UpdatedAt: now,
+		Status: media.StatusQueued, Progress: 0, InputJSON: inputJSON, InputImageCount: len(allRefs), CreatedAt: now, UpdatedAt: now,
 	}
 	reserved := false
 	if pricing, ok := audit.EstimateOfficialVideoCost(externalModel, input.Resolution, input.Duration); ok {
@@ -302,7 +314,8 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	if err := s.mediaJobs.UpdateMediaJob(ctx, job); err != nil {
 		s.logger.Warn("video_job_progress_write_failed", "job_id", job.ID, "error", err)
 	}
-	inputReferences := decodeVideoInput(job.InputJSON)
+	jobInput := decodeVideoJobInput(job.InputJSON)
+	inputReferences := jobInput.allURLs()
 	releaseInputSlot, err := s.acquireVideoInputSlot(ctx, inputReferences)
 	if err != nil {
 		s.deferVideoJob(parent, job)
@@ -333,7 +346,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		s.failVideoJob(parent, job, "provider_unavailable", ErrNoAvailableAccount)
 		return
 	}
-	referenceURLs, err := s.resolveVideoInputReferences(ctx, inputReferences)
+	resolved, err := s.resolveVideoJobInput(ctx, jobInput)
 	if err != nil {
 		s.failVideoJob(parent, job, "input_unavailable", err)
 		return
@@ -341,7 +354,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	lastProgress := job.Progress
 	result, err := adapter.GenerateVideo(ctx, provider.VideoRequest{
 		Credential: lease.Credential, Billing: lease.Billing, JobID: job.ID, Prompt: job.Prompt, Duration: job.Seconds, AspectRatio: job.Size, Resolution: job.Quality,
-		ReferenceURLs: referenceURLs,
+		FirstFrameURL: resolved.FirstFrameURL, ReferenceURLs: resolved.ReferenceURLs, UpstreamModel: route.UpstreamModel,
 		Progress: func(value int) {
 			value = min(99, max(1, value))
 			if value-lastProgress < 5 {
@@ -357,7 +370,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		},
 	})
 	// Provider 已消费请求体，尽早释放 Base64 物化名额和大字符串。
-	referenceURLs = nil
+	resolved = videoJobInput{}
 	releaseInputSlot()
 	if err == nil && result.AssetID == "" && result.URL != "" {
 		result, err = s.persistRemoteVideo(ctx, job.ID, adapter, lease.Credential, result)
@@ -671,6 +684,64 @@ func (s *Service) recordVideoAudit(ctx context.Context, job media.Job, durationM
 	return s.mediaJobs.MarkMediaJobUsageRecorded(markCtx, job.ID, time.Now().UTC())
 }
 
+// videoJobInput is persisted in media_jobs.input_json.
+// Legacy jobs only have image_urls; new jobs prefer first_frame_url + reference_urls.
+type videoJobInput struct {
+	FirstFrameURL string
+	ReferenceURLs []string
+}
+
+func (in videoJobInput) allURLs() []string {
+	out := make([]string, 0, 1+len(in.ReferenceURLs))
+	if strings.TrimSpace(in.FirstFrameURL) != "" {
+		out = append(out, strings.TrimSpace(in.FirstFrameURL))
+	}
+	for _, u := range in.ReferenceURLs {
+		if v := strings.TrimSpace(u); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func trimVideoURLList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if v := strings.TrimSpace(value); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func encodeVideoJobInput(input videoJobInput) (string, error) {
+	first := strings.TrimSpace(input.FirstFrameURL)
+	refs := trimVideoURLList(input.ReferenceURLs)
+	// Prefer compact structured form. Also emit legacy image_urls as the flat union so
+	// older release paths that only read image_urls still free temporary inputs.
+	// When only references are present (common R2V / legacy), store the flat list alone
+	// to avoid doubling large base64 payloads.
+	if first == "" {
+		return encodeVideoInput(refs)
+	}
+	payload := map[string]any{
+		"first_frame_url": first,
+		"image_urls":      input.allURLs(),
+	}
+	if len(refs) > 0 {
+		payload["reference_urls"] = refs
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("编码视频输入: %w", err)
+	}
+	if len(data) > media.MaxInputJSONBytes {
+		return "", ErrVideoInputTooLarge
+	}
+	return string(data), nil
+}
+
+// encodeVideoInput stores the historical flat image_urls list (size-limit tests + legacy jobs).
 func encodeVideoInput(referenceURLs []string) (string, error) {
 	data, err := json.Marshal(map[string][]string{"image_urls": referenceURLs})
 	if err != nil {
@@ -682,10 +753,41 @@ func encodeVideoInput(referenceURLs []string) (string, error) {
 	return string(data), nil
 }
 
+func decodeVideoJobInput(value string) videoJobInput {
+	var raw struct {
+		FirstFrameURL string   `json:"first_frame_url"`
+		ReferenceURLs []string `json:"reference_urls"`
+		ImageURLs     []string `json:"image_urls"`
+	}
+	_ = json.Unmarshal([]byte(value), &raw)
+	first := strings.TrimSpace(raw.FirstFrameURL)
+	refs := trimVideoURLList(raw.ReferenceURLs)
+	if first != "" || len(refs) > 0 {
+		return videoJobInput{FirstFrameURL: first, ReferenceURLs: refs}
+	}
+	// Legacy: only image_urls. Preserve prior multi-ref Web behavior by treating them as references.
+	// Console GenerateVideo still maps a lone legacy URL to image when FirstFrame is empty and len==1.
+	return videoJobInput{ReferenceURLs: trimVideoURLList(raw.ImageURLs)}
+}
+
 func decodeVideoInput(value string) []string {
-	var input map[string][]string
-	_ = json.Unmarshal([]byte(value), &input)
-	return input["image_urls"]
+	return decodeVideoJobInput(value).allURLs()
+}
+
+func (s *Service) resolveVideoJobInput(ctx context.Context, input videoJobInput) (videoJobInput, error) {
+	all := input.allURLs()
+	resolvedAll, err := s.resolveVideoInputReferences(ctx, all)
+	if err != nil {
+		return videoJobInput{}, err
+	}
+	if strings.TrimSpace(input.FirstFrameURL) == "" {
+		return videoJobInput{ReferenceURLs: resolvedAll}, nil
+	}
+	if len(resolvedAll) == 0 {
+		return videoJobInput{}, nil
+	}
+	// first URL in allURLs() is always the first frame when set.
+	return videoJobInput{FirstFrameURL: resolvedAll[0], ReferenceURLs: resolvedAll[1:]}, nil
 }
 
 func (s *Service) failVideoJob(ctx context.Context, job media.Job, code string, err error) {
@@ -710,7 +812,7 @@ func (s *Service) releaseVideoInputs(job media.Job) {
 	if s.mediaAssets == nil {
 		return
 	}
-	references := decodeVideoInput(job.InputJSON)
+	references := decodeVideoJobInput(job.InputJSON).allURLs()
 	if len(references) == 0 {
 		return
 	}

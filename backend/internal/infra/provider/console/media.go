@@ -28,8 +28,8 @@ const (
 	consoleImageDownloadTimeout = 45 * time.Second
 	consoleMediaOutputAttempts  = 3
 	consoleVideoPollEvery       = 2 * time.Second
-	consoleMaxEditImages        = 3
-	consoleMaxVideoImages       = 1
+	consoleMaxEditImages  = 3
+	consoleMaxVideoImages = mediadomain.MaxInputImages // reference_images cap (official multi-ref R2V)
 )
 
 type consoleMediaUpstreamError struct {
@@ -394,20 +394,38 @@ func trustedConsoleImageHost(host string) bool {
 }
 
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
-	if !ResolveMedia("grok-imagine-video", modeldomain.CapabilityVideo) {
-		return provider.VideoResult{}, errors.New("Console 视频模型未注册")
+	modelName := strings.TrimSpace(request.UpstreamModel)
+	if modelName == "" {
+		modelName = "grok-imagine-video"
 	}
-	if len(request.ReferenceURLs) > consoleMaxVideoImages {
-		return provider.VideoResult{}, fmt.Errorf("Console grok-imagine-video 最多支持 1 张首图，当前为 %d 张", len(request.ReferenceURLs))
+	if !ResolveMedia(modelName, modeldomain.CapabilityVideo) {
+		return provider.VideoResult{}, fmt.Errorf("Console 视频模型未注册: %s", modelName)
+	}
+	firstFrame := strings.TrimSpace(request.FirstFrameURL)
+	references := make([]string, 0, len(request.ReferenceURLs))
+	for _, raw := range request.ReferenceURLs {
+		if value := strings.TrimSpace(raw); value != "" {
+			references = append(references, value)
+		}
+	}
+	// Legacy jobs may only populate ReferenceURLs with a single I2V frame.
+	if firstFrame == "" && len(references) == 1 {
+		firstFrame, references = references[0], nil
+	}
+	if firstFrame != "" && len(references) > 0 {
+		return provider.VideoResult{}, errors.New("image 与 reference_images 不能同时使用")
+	}
+	if len(references) > consoleMaxVideoImages {
+		return provider.VideoResult{}, fmt.Errorf("Console reference_images 最多支持 %d 张，当前为 %d 张", consoleMaxVideoImages, len(references))
 	}
 	if request.Duration < 1 || request.Duration > 15 {
 		return provider.VideoResult{}, errors.New("duration 必须在 1 到 15 秒之间")
 	}
-	if request.Resolution != "" && request.Resolution != "480p" && request.Resolution != "720p" {
-		return provider.VideoResult{}, errors.New("grok-imagine-video 仅支持 480p 或 720p")
+	if err := validateConsoleVideoResolution(modelName, request.Resolution); err != nil {
+		return provider.VideoResult{}, err
 	}
 	payload := map[string]any{
-		"model": "grok-imagine-video", "duration": request.Duration,
+		"model": modelName, "duration": request.Duration,
 	}
 	if prompt := strings.TrimSpace(request.Prompt); prompt != "" {
 		payload["prompt"] = prompt
@@ -418,16 +436,27 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if resolution := strings.TrimSpace(request.Resolution); resolution != "" {
 		payload["resolution"] = resolution
 	}
-	if len(request.ReferenceURLs) == 1 {
-		value := strings.TrimSpace(request.ReferenceURLs[0])
-		if !validConsoleMediaInputURL(value, "image") {
+	if firstFrame != "" {
+		if !validConsoleMediaInputURL(firstFrame, "image") {
 			return provider.VideoResult{}, errors.New("视频首图必须是 HTTPS URL 或 image data URL")
 		}
-		payload["image"] = map[string]any{"url": value}
+		payload["image"] = map[string]any{"url": firstFrame}
+	}
+	if len(references) > 0 {
+		refs := make([]map[string]any, 0, len(references))
+		for _, value := range references {
+			if !validConsoleMediaInputURL(value, "image") {
+				return provider.VideoResult{}, errors.New("reference_images 必须是 HTTPS URL 或 image data URL")
+			}
+			refs = append(refs, map[string]any{"url": value})
+		}
+		payload["reference_images"] = refs
 	}
 	if _, hasPrompt := payload["prompt"]; !hasPrompt {
 		if _, hasImage := payload["image"]; !hasImage {
-			return provider.VideoResult{}, errors.New("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
+			if _, hasRefs := payload["reference_images"]; !hasRefs {
+				return provider.VideoResult{}, errors.New("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
+			}
 		}
 	}
 
@@ -628,6 +657,24 @@ func validConsoleMediaInputURL(value, mediaType string) bool {
 	}
 	parsed, err := url.Parse(value)
 	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil
+}
+
+func validateConsoleVideoResolution(model, resolution string) error {
+	resolution = strings.ToLower(strings.TrimSpace(resolution))
+	if resolution == "" {
+		return nil
+	}
+	allow1080 := strings.EqualFold(strings.TrimSpace(model), "grok-imagine-video-1.5")
+	switch {
+	case resolution == "480p", resolution == "720p":
+		return nil
+	case resolution == "1080p" && allow1080:
+		return nil
+	case resolution == "1080p":
+		return errors.New("grok-imagine-video 仅支持 480p 或 720p；1080p 需要 grok-imagine-video-1.5")
+	default:
+		return fmt.Errorf("不支持的 resolution: %s", resolution)
+	}
 }
 
 func parseConsoleVideoCreate(body []byte) (string, error) {
