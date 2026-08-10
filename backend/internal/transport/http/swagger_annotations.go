@@ -62,13 +62,36 @@ type SwaggerImageEditRequest struct {
 	PartialImages  int                   `json:"partial_images,omitempty" example:"0"`
 }
 
+// SwaggerVideoMediaReference 表示视频接口中的 media 输入（image / video / reference）。
+type SwaggerVideoMediaReference struct {
+	URL    string `json:"url,omitempty" example:"https://example.com/input.png"`
+	FileID string `json:"file_id,omitempty" example:"input_abcdefghijklmnopqrstuvwxyz012345"`
+}
+
 // SwaggerVideoGenerationRequest 表示视频生成请求。
 type SwaggerVideoGenerationRequest struct {
-	Model       string `json:"model" example:"grok-imagine-video"`
-	Prompt      string `json:"prompt" example:"A cinematic tracking shot in the rain"`
-	Duration    int    `json:"duration" example:"8"`
-	AspectRatio string `json:"aspect_ratio,omitempty" example:"16:9"`
-	Resolution  string `json:"resolution,omitempty" example:"720p"`
+	Model           string                       `json:"model" example:"grok-imagine-video-1.5"`
+	Prompt          string                       `json:"prompt" example:"A cinematic tracking shot in the rain"`
+	Duration        int                          `json:"duration" example:"8"`
+	AspectRatio     string                       `json:"aspect_ratio,omitempty" example:"16:9"`
+	Resolution      string                       `json:"resolution,omitempty" example:"720p"`
+	Image           *SwaggerVideoMediaReference  `json:"image,omitempty"`
+	ReferenceImages []SwaggerVideoMediaReference `json:"reference_images,omitempty"`
+}
+
+// SwaggerVideoEditRequest 表示视频编辑请求。
+type SwaggerVideoEditRequest struct {
+	Model  string                      `json:"model" example:"grok-imagine-video"`
+	Prompt string                      `json:"prompt" example:"Add a gentle cinematic grade"`
+	Video  SwaggerVideoMediaReference  `json:"video"`
+}
+
+// SwaggerVideoExtendRequest 表示视频扩展请求。
+type SwaggerVideoExtendRequest struct {
+	Model    string                     `json:"model" example:"grok-imagine-video"`
+	Prompt   string                     `json:"prompt" example:"Continue the motion naturally"`
+	Duration int                        `json:"duration" example:"6"`
+	Video    SwaggerVideoMediaReference `json:"video"`
 }
 
 // swaggerHealth godoc
@@ -206,7 +229,8 @@ func swaggerEditImage() {}
 func swaggerGetImage() {}
 
 // swaggerGenerateVideo godoc
-// @Summary 创建异步视频任务
+// @Summary 创建异步视频生成任务
+// @Description T2V / I2V / R2V。image 与 reference_images 互斥。Console 支持 grok-imagine-video 与 grok-imagine-video-1.5（1.5 可 1080p）。返回 request_id 后用 GET /v1/videos/{request_id} 轮询。
 // @Tags Videos
 // @Security BearerAuth
 // @Accept json
@@ -217,8 +241,35 @@ func swaggerGetImage() {}
 // @Router /v1/videos/generations [post]
 func swaggerGenerateVideo() {}
 
+// swaggerEditVideo godoc
+// @Summary 创建异步视频编辑任务
+// @Description 官方 edits 形态。当前仅 Console + grok-imagine-video。video.url 支持 HTTPS 或 data:video/*;base64。大 data URL 可能触发上游鉴权过期，建议用较小 mp4 或 HTTPS。
+// @Tags Videos
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param request body SwaggerVideoEditRequest true "请求"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]any
+// @Router /v1/videos/edits [post]
+func swaggerEditVideo() {}
+
+// swaggerExtendVideo godoc
+// @Summary 创建异步视频扩展任务
+// @Description 官方 extensions 形态。duration 为扩展段秒数（2–10，默认 6）。当前仅 Console + grok-imagine-video。
+// @Tags Videos
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param request body SwaggerVideoExtendRequest true "请求"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]any
+// @Router /v1/videos/extensions [post]
+func swaggerExtendVideo() {}
+
 // swaggerGetVideo godoc
 // @Summary 查询异步视频任务
+// @Description status: pending|done|failed。generations / edits / extensions 共用。
 // @Tags Videos
 // @Security BearerAuth
 // @Produce json
@@ -227,3 +278,14 @@ func swaggerGenerateVideo() {}
 // @Failure 404 {object} map[string]any
 // @Router /v1/videos/{request_id} [get]
 func swaggerGetVideo() {}
+
+// swaggerGetVideoContent godoc
+// @Summary 下载已完成视频内容
+// @Tags Videos
+// @Security BearerAuth
+// @Produce video/mp4
+// @Param request_id path string true "Request ID"
+// @Success 200 {file} binary
+// @Failure 404
+// @Router /v1/videos/{request_id}/content [get]
+func swaggerGetVideoContent() {}

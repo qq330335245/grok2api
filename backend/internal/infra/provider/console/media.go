@@ -509,7 +509,7 @@ func buildConsoleVideoGeneratePayload(modelName string, request provider.VideoRe
 	}
 	if firstFrame != "" {
 		if !validConsoleMediaInputURL(firstFrame, "image") {
-			return nil, errors.New("视频首图必须是 HTTPS URL 或 image data URL")
+			return nil, errors.New("image（I2V 首帧）必须是 HTTPS URL 或 image data URL")
 		}
 		payload["image"] = map[string]any{"url": firstFrame}
 	}

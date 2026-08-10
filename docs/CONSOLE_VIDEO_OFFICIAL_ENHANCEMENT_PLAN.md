@@ -243,14 +243,14 @@ Mode            generate | edit | extend
 2. [x] Gateway 统一 `Mode`（generate|edit|extend）+ `SourceVideoURL`  
 3. [x] Console 出站 edits/extensions + 轮询复用；Web/Build 明确拒绝  
 4. [x] 相关单测（console payload 路径、handler 校验）  
-5. [ ] 大视频 data URL 说明/可选中转（Phase 3 文档）  
+5. [x] 大视频 data URL 说明（文档）；可选中转仍属 P2  
 
 ### Phase 3 — 打磨（P1）
 
-1. 错误映射与文案  
-2. Swagger / 控制台 API 文档  
-3. 配额 kind=video 与多接口共享说明  
-4. CHANGELOG / VERSION 策略（fork 可用 `3.1.2-console-video.1` 或文档标注）  
+1. [x] 错误映射与文案（创建 400 + 任务 failed code 映射；弱化「首图」误导）  
+2. [x] Swagger + 用户文档 `docs/CONSOLE_VIDEO_API.md`；README 补充  
+3. [x] 配额：文档说明 generations/edits/extensions 共享视频额度  
+4. [x] `VERSION` / `CHANGELOG` → `3.1.2-console-video.1`  
 
 ### Phase 4 — 二期（P2，另开计划）
 
@@ -312,3 +312,4 @@ Mode            generate | edit | extend
 | 2026-08-10 | 确认 `qq330335245/grok2api` 已是官方 fork 且与 `chenyme/grok2api@main` **identical**（v3.1.2）；旧定制在独立仓 `grok2api-egress-enhanced`，本期不混入。开发分支 `feat/console-video-official-capabilities` |
 | 2026-08-10 | Phase 1：image/reference 分流、多参考 R2V、Console 1.5（`f711ba1`） |
 | 2026-08-10 | Phase 2：edits/extensions 端到端（Console 优先） |
+| 2026-08-10 | Phase 3：错误映射、Swagger/文档、VERSION `3.1.2-console-video.1` |

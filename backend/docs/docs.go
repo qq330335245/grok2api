@@ -497,13 +497,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/v1/videos/generations": {
+        "/v1/videos/edits": {
             "post": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
+                "description": "官方 edits 形态。当前仅 Console + grok-imagine-video。video.url 支持 HTTPS 或 data:video/*;base64。大 data URL 可能触发上游鉴权过期，建议用较小 mp4 或 HTTPS。",
                 "consumes": [
                     "application/json"
                 ],
@@ -513,7 +514,105 @@ const docTemplate = `{
                 "tags": [
                     "Videos"
                 ],
-                "summary": "创建异步视频任务",
+                "summary": "创建异步视频编辑任务",
+                "parameters": [
+                    {
+                        "description": "请求",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/httpserver.SwaggerVideoEditRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/videos/extensions": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "官方 extensions 形态。duration 为扩展段秒数（2–10，默认 6）。当前仅 Console + grok-imagine-video。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Videos"
+                ],
+                "summary": "创建异步视频扩展任务",
+                "parameters": [
+                    {
+                        "description": "请求",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/httpserver.SwaggerVideoExtendRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/videos/generations": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "T2V / I2V / R2V。image 与 reference_images 互斥。Console 支持 grok-imagine-video 与 grok-imagine-video-1.5（1.5 可 1080p）。返回 request_id 后用 GET /v1/videos/{request_id} 轮询。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Videos"
+                ],
+                "summary": "创建异步视频生成任务",
                 "parameters": [
                     {
                         "description": "请求",
@@ -552,6 +651,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "status: pending|done|failed。generations / edits / extensions 共用。",
                 "produces": [
                     "application/json"
                 ],
@@ -582,6 +682,42 @@ const docTemplate = `{
                             "type": "object",
                             "additionalProperties": true
                         }
+                    }
+                }
+            }
+        },
+        "/v1/videos/{request_id}/content": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "video/mp4"
+                ],
+                "tags": [
+                    "Videos"
+                ],
+                "summary": "下载已完成视频内容",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Request ID",
+                        "name": "request_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found"
                     }
                 }
             }
@@ -754,6 +890,42 @@ const docTemplate = `{
                 }
             }
         },
+        "httpserver.SwaggerVideoEditRequest": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "example": "grok-imagine-video"
+                },
+                "prompt": {
+                    "type": "string",
+                    "example": "Add a gentle cinematic grade"
+                },
+                "video": {
+                    "$ref": "#/definitions/httpserver.SwaggerVideoMediaReference"
+                }
+            }
+        },
+        "httpserver.SwaggerVideoExtendRequest": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "type": "integer",
+                    "example": 6
+                },
+                "model": {
+                    "type": "string",
+                    "example": "grok-imagine-video"
+                },
+                "prompt": {
+                    "type": "string",
+                    "example": "Continue the motion naturally"
+                },
+                "video": {
+                    "$ref": "#/definitions/httpserver.SwaggerVideoMediaReference"
+                }
+            }
+        },
         "httpserver.SwaggerVideoGenerationRequest": {
             "type": "object",
             "properties": {
@@ -765,34 +937,48 @@ const docTemplate = `{
                     "type": "integer",
                     "example": 8
                 },
+                "image": {
+                    "$ref": "#/definitions/httpserver.SwaggerVideoMediaReference"
+                },
                 "model": {
                     "type": "string",
-                    "example": "grok-imagine-video"
+                    "example": "grok-imagine-video-1.5"
                 },
                 "prompt": {
                     "type": "string",
                     "example": "A cinematic tracking shot in the rain"
+                },
+                "reference_images": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpserver.SwaggerVideoMediaReference"
+                    }
                 },
                 "resolution": {
                     "type": "string",
                     "example": "720p"
                 }
             }
-        }
-    },
-    "securityDefinitions": {
-        "BearerAuth": {
-            "description": "使用 \"Bearer g2a_xxx_xxx\"。",
-            "type": "apiKey",
-            "name": "Authorization",
-            "in": "header"
+        },
+        "httpserver.SwaggerVideoMediaReference": {
+            "type": "object",
+            "properties": {
+                "file_id": {
+                    "type": "string",
+                    "example": "input_abcdefghijklmnopqrstuvwxyz012345"
+                },
+                "url": {
+                    "type": "string",
+                    "example": "https://example.com/input.png"
+                }
+            }
         }
     }
 }`
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0",
+	Version:          "3.1.2-console-video.1",
 	Host:             "",
 	BasePath:         "/",
 	Schemes:          []string{},

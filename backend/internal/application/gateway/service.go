@@ -47,6 +47,22 @@ var (
 	ErrLedgerUnavailable          = errors.New("计费账本暂不可用")
 )
 
+// InvalidRequestError is a client-facing validation failure (HTTP 400).
+type InvalidRequestError struct {
+	Message string
+}
+
+func (e *InvalidRequestError) Error() string {
+	if e == nil || e.Message == "" {
+		return "请求无效"
+	}
+	return e.Message
+}
+
+func invalidRequestf(format string, args ...any) error {
+	return &InvalidRequestError{Message: fmt.Sprintf(format, args...)}
+}
+
 const responseOwnershipTTL = 30 * 24 * time.Hour
 const finalizationTimeout = 5 * time.Second
 const minimumTextBillingReservationTTL = 2 * time.Hour

@@ -277,7 +277,10 @@ Console 使用当前版本内置目录。对话为无状态转发；图片和视
 | `grok-build-0.1` | 对话 | Chat Completions、Responses、Messages |
 | `grok-imagine-image` | 图像、图像编辑 | Images Generations、Images Edits |
 | `grok-imagine-image-quality` | 图像、图像编辑 | Images Generations、Images Edits |
-| `grok-imagine-video` | 视频 | Videos |
+| `grok-imagine-video` | 视频 | Videos generations；**edits / extensions**（仅 Console） |
+| `grok-imagine-video-1.5` | 视频 | Videos generations（T2V/I2V/R2V；允许 1080p） |
+
+Console 官方视频形态说明（多参考、`image`/`reference_images` 互斥、1.5、编辑/扩展）：[`docs/CONSOLE_VIDEO_API.md`](docs/CONSOLE_VIDEO_API.md)。
 
 同一个 Console 图片模型的生成与编辑能力会聚合展示为一条逻辑模型，不需要创建 `-edit` 模型副本。
 
@@ -309,7 +312,9 @@ Authorization: Bearer g2a_xxx_xxx
 | `POST` | `/v1/chat/completions` | Chat Completions JSON/SSE |
 | `POST` | `/v1/messages` | Anthropic Messages JSON/SSE |
 | `POST` | `/v1/images/generations`、`/v1/images/edits` | 生成或编辑图片 |
-| `POST`、`GET` | `/v1/videos/*` | 创建和查询视频任务 |
+| `POST` | `/v1/videos/generations` | 创建 T2V/I2V/R2V 视频任务 |
+| `POST` | `/v1/videos/edits`、`/v1/videos/extensions` | 编辑或扩展源视频（Console） |
+| `GET` | `/v1/videos/{id}`、`/v1/videos/{id}/content` | 轮询任务状态与下载成片 |
 | `GET` | `/v1/media/images/{asset_id}`、`/v1/media/videos/{asset_id}` | 读取归档媒体 |
 
 stored response 和 compact 取决于最终 Provider。登录管理端后可在 `/docs` 查看当前模型与调用示例；仅在 `server.swaggerEnabled: true` 时提供 Swagger。

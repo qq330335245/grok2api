@@ -81,29 +81,29 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	switch mode {
 	case provider.VideoModeGenerate:
 		if firstFrame != "" && len(references) > 0 {
-			return media.Job{}, fmt.Errorf("image 与 reference_images 不能同时使用")
+			return media.Job{}, invalidRequestf("image 与 reference_images 不能同时使用")
 		}
 		if sourceVideo != "" {
-			return media.Job{}, fmt.Errorf("视频生成不支持 video 输入，请使用 /v1/videos/edits 或 /v1/videos/extensions")
+			return media.Job{}, invalidRequestf("视频生成不支持 video 输入，请使用 /v1/videos/edits 或 /v1/videos/extensions")
 		}
 		if len(input.Prompt) > 100000 || (len(input.Prompt) == 0 && firstFrame == "" && len(references) == 0) {
-			return media.Job{}, fmt.Errorf("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
+			return media.Job{}, invalidRequestf("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
 		}
 	case provider.VideoModeEdit, provider.VideoModeExtend:
 		if firstFrame != "" || len(references) > 0 {
-			return media.Job{}, fmt.Errorf("视频编辑/扩展不支持 image 或 reference_images")
+			return media.Job{}, invalidRequestf("视频编辑/扩展不支持 image 或 reference_images")
 		}
 		if sourceVideo == "" {
-			return media.Job{}, fmt.Errorf("视频编辑/扩展必须提供 video")
+			return media.Job{}, invalidRequestf("视频编辑/扩展必须提供 video")
 		}
 		if strings.TrimSpace(input.Prompt) == "" || len(input.Prompt) > 100000 {
-			return media.Job{}, fmt.Errorf("视频编辑/扩展必须提供有效 prompt")
+			return media.Job{}, invalidRequestf("视频编辑/扩展必须提供有效 prompt")
 		}
 		if mode == provider.VideoModeExtend && (input.Duration < 2 || input.Duration > 10) {
-			return media.Job{}, fmt.Errorf("视频扩展 duration 必须在 2 到 10 秒之间")
+			return media.Job{}, invalidRequestf("视频扩展 duration 必须在 2 到 10 秒之间")
 		}
 	default:
-		return media.Job{}, fmt.Errorf("不支持的视频模式: %s", mode)
+		return media.Job{}, invalidRequestf("不支持的视频模式: %s", mode)
 	}
 	allRefs := references
 	if firstFrame != "" {
@@ -476,10 +476,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		failureCancel()
 		applyMediaJobEgress(&job, egressTrace, route.Provider)
 		s.logVideoGenerationFailure(job, lease.Credential, err)
-		failureCode, publicErr := "generation_failed", err
-		if status, ok := provider.ErrorHTTPStatus(err); errors.Is(err, provider.ErrUnauthorized) || (ok && (status == http.StatusUnauthorized || status == http.StatusForbidden)) {
-			failureCode, publicErr = "provider_unavailable", errors.New("上游服务暂不可用")
-		}
+		failureCode, publicErr := classifyVideoGenerationFailure(err)
 		s.failVideoJob(parent, job, failureCode, publicErr)
 		return
 	}
@@ -879,6 +876,63 @@ func (s *Service) resolveVideoJobInput(ctx context.Context, input videoJobInput)
 	// Legacy flat image_urls → references for generate.
 	out.ReferenceURLs = append([]string(nil), resolvedAll...)
 	return out, nil
+}
+
+// classifyVideoGenerationFailure maps provider/local failures to stable job error codes and client-safe messages.
+func classifyVideoGenerationFailure(err error) (code string, public error) {
+	if err == nil {
+		return "generation_failed", errors.New("视频生成失败")
+	}
+	var invalid *InvalidRequestError
+	if errors.As(err, &invalid) {
+		return "invalid_argument", invalid
+	}
+	if errors.Is(err, provider.ErrUnauthorized) {
+		return "provider_unavailable", errors.New("上游服务暂不可用")
+	}
+	if status, ok := provider.ErrorHTTPStatus(err); ok {
+		switch {
+		case status == http.StatusUnauthorized || status == http.StatusForbidden:
+			return "provider_unavailable", errors.New("上游服务暂不可用")
+		case status == http.StatusTooManyRequests:
+			return "rate_limited", errors.New("上游视频额度或速率受限，请稍后重试")
+		case status == http.StatusPaymentRequired:
+			return "quota_exhausted", errors.New("上游视频额度不足")
+		case status == http.StatusBadRequest:
+			return "invalid_argument", publicVideoClientMessage(err)
+		case status >= http.StatusInternalServerError:
+			return "generation_failed", errors.New("上游视频生成失败，请稍后重试")
+		}
+	}
+	message := err.Error()
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(message, "不能同时"), strings.Contains(message, "必须提供"),
+		strings.Contains(message, "仅支持"), strings.Contains(message, "不支持"),
+		strings.Contains(message, "最多支持"), strings.Contains(message, "必须是"),
+		strings.Contains(lower, "invalid"):
+		return "invalid_argument", publicVideoClientMessage(err)
+	case strings.Contains(lower, "rate"), strings.Contains(message, "额度"), strings.Contains(lower, "quota"),
+		strings.Contains(lower, "resource-exhausted"), strings.Contains(lower, "resource_exhausted"):
+		return "rate_limited", errors.New("上游视频额度或速率受限，请稍后重试")
+	default:
+		return "generation_failed", publicVideoClientMessage(err)
+	}
+}
+
+func publicVideoClientMessage(err error) error {
+	if err == nil {
+		return errors.New("视频生成失败")
+	}
+	message := strings.Join(strings.Fields(err.Error()), " ")
+	// Avoid leaking raw multi-line upstream dumps; keep short actionable text.
+	if len(message) > 240 {
+		message = message[:240]
+	}
+	// Soften historical "首图" wording that misleads R2V clients.
+	message = strings.ReplaceAll(message, "最多支持 1 张首图", "当前路径最多支持 1 张 image 输入")
+	message = strings.ReplaceAll(message, "视频首图", "image（I2V 首帧）")
+	return errors.New(message)
 }
 
 func (s *Service) failVideoJob(ctx context.Context, job media.Job, code string, err error) {

@@ -114,6 +114,19 @@ func TestVideoGenerationUsesOfficialXAIEndpointsAndFields(t *testing.T) {
 		t.Fatalf("video content endpoint status=%d", contentRecorder.Code)
 	}
 
+	// image + reference_images must be rejected as mutual exclusive.
+	bothInputs := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{
+		"model":"grok-imagine-video","prompt":"x",
+		"image":{"url":"https://example.com/a.png"},
+		"reference_images":[{"url":"https://example.com/b.png"}]
+	}`))
+	bothInputs.Header.Set("Content-Type", "application/json")
+	bothRecorder := httptest.NewRecorder()
+	router.ServeHTTP(bothRecorder, bothInputs)
+	if bothRecorder.Code != http.StatusBadRequest || !strings.Contains(bothRecorder.Body.String(), "不能同时") {
+		t.Fatalf("mutual exclusion status=%d body=%s", bothRecorder.Code, bothRecorder.Body.String())
+	}
+
 	// Edit/extend accept official shapes up to auth; reject bad duration and missing video.
 	editOK := httptest.NewRequest(http.MethodPost, "/v1/videos/edits", strings.NewReader(`{
 		"model":"grok-imagine-video","prompt":"grade","video":{"url":"https://example.com/a.mp4"}
@@ -454,6 +467,16 @@ func TestVideoGenerationResponseMatchesOfficialPollingShape(t *testing.T) {
 	video, ok := done["video"].(gin.H)
 	if done["status"] != "done" || done["progress"] != 100 || !ok || video["url"] != "https://assets.grok.com/video.mp4" || video["duration"] != 8 || video["respect_moderation"] != true {
 		t.Fatalf("done response=%#v", done)
+	}
+	rateLimited := videoGenerationResponse(mediadomain.Job{Status: mediadomain.StatusFailed, ErrorCode: "rate_limited", ErrorMessage: "slow down"})
+	rateErr, _ := rateLimited["error"].(gin.H)
+	if rateLimited["status"] != "failed" || rateErr["code"] != "rate_limit_exceeded" {
+		t.Fatalf("rate limited response = %#v", rateLimited)
+	}
+	invalidArg := videoGenerationResponse(mediadomain.Job{Status: mediadomain.StatusFailed, ErrorCode: "invalid_argument", ErrorMessage: "bad input"})
+	invalidErr, _ := invalidArg["error"].(gin.H)
+	if invalidErr["code"] != "invalid_argument" {
+		t.Fatalf("invalid argument response = %#v", invalidArg)
 	}
 	failed := videoGenerationResponse(mediadomain.Job{Status: mediadomain.StatusFailed, ErrorCode: "account_unavailable", ErrorMessage: "try later"})
 	errorValue, ok := failed["error"].(gin.H)

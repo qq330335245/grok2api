@@ -1,7 +1,7 @@
 package main
 
 // @title Grok2API
-// @version 1.0
+// @version 3.1.2-console-video.1
 // @description Grok Build 与 Grok Web 多账号 API 网关。
 // @BasePath /
 // @securityDefinitions.apikey BearerAuth

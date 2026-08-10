@@ -124,7 +124,7 @@ func TestGenerateVideoRejectsTwoImagesBeforeUpstream(t *testing.T) {
 			"https://cdn.example.com/two.png",
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "最多支持 1 张首图") {
+	if err == nil || !strings.Contains(err.Error(), "最多支持 1 张 image 输入") {
 		t.Fatalf("error = %v", err)
 	}
 	if hits.Load() != 0 {

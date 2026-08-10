@@ -977,8 +977,12 @@ func officialVideoErrorCode(value string) string {
 	switch value {
 	case "account_unavailable", "provider_unavailable":
 		return "service_unavailable"
-	case "model_not_found":
+	case "model_not_found", "invalid_argument", "invalid_request", "input_unavailable":
 		return "invalid_argument"
+	case "rate_limited":
+		return "rate_limit_exceeded"
+	case "quota_exhausted":
+		return "resource_exhausted"
 	default:
 		return "internal_error"
 	}
@@ -1790,6 +1794,7 @@ func writeGatewayError(c *gin.Context, err error) {
 	message := "上游服务暂不可用"
 	var upstreamFailure *gateway.UpstreamFailure
 	var selectionFailure *gateway.SelectionUnavailableError
+	var invalidReq *gateway.InvalidRequestError
 	switch {
 	case errors.Is(err, gateway.ErrLedgerUnavailable):
 		status, code = http.StatusServiceUnavailable, "ledger_unavailable"
@@ -1812,6 +1817,9 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrVideoInputTooLarge), errors.Is(err, gateway.ErrVideoInputUnavailable):
 		status, code = http.StatusBadRequest, "invalid_request"
 		message = err.Error()
+	case errors.As(err, &invalidReq):
+		status, code = http.StatusBadRequest, "invalid_request"
+		message = invalidReq.Error()
 	case errors.As(err, &upstreamFailure):
 		if isSanitizedUpstreamAvailabilityFailure(upstreamFailure) {
 			// Gateway mid-tier behavior: never expose upstream upgrade/billing prompts to clients.

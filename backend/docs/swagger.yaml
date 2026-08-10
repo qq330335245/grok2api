@@ -118,6 +118,31 @@ definitions:
         example: false
         type: boolean
     type: object
+  httpserver.SwaggerVideoEditRequest:
+    properties:
+      model:
+        example: grok-imagine-video
+        type: string
+      prompt:
+        example: Add a gentle cinematic grade
+        type: string
+      video:
+        $ref: '#/definitions/httpserver.SwaggerVideoMediaReference'
+    type: object
+  httpserver.SwaggerVideoExtendRequest:
+    properties:
+      duration:
+        example: 6
+        type: integer
+      model:
+        example: grok-imagine-video
+        type: string
+      prompt:
+        example: Continue the motion naturally
+        type: string
+      video:
+        $ref: '#/definitions/httpserver.SwaggerVideoMediaReference'
+    type: object
   httpserver.SwaggerVideoGenerationRequest:
     properties:
       aspect_ratio:
@@ -126,21 +151,36 @@ definitions:
       duration:
         example: 8
         type: integer
+      image:
+        $ref: '#/definitions/httpserver.SwaggerVideoMediaReference'
       model:
-        example: grok-imagine-video
+        example: grok-imagine-video-1.5
         type: string
       prompt:
         example: A cinematic tracking shot in the rain
         type: string
+      reference_images:
+        items:
+          $ref: '#/definitions/httpserver.SwaggerVideoMediaReference'
+        type: array
       resolution:
         example: 720p
+        type: string
+    type: object
+  httpserver.SwaggerVideoMediaReference:
+    properties:
+      file_id:
+        example: input_abcdefghijklmnopqrstuvwxyz012345
+        type: string
+      url:
+        example: https://example.com/input.png
         type: string
     type: object
 info:
   contact: {}
   description: Grok Build 与 Grok Web 多账号 API 网关。
   title: Grok2API
-  version: "1.0"
+  version: 3.1.2-console-video.1
 paths:
   /healthz:
     get:
@@ -451,6 +491,7 @@ paths:
       - Responses
   /v1/videos/{request_id}:
     get:
+      description: 'status: pending|done|failed。generations / edits / extensions 共用。'
       parameters:
       - description: Request ID
         in: path
@@ -475,10 +516,98 @@ paths:
       summary: 查询异步视频任务
       tags:
       - Videos
+  /v1/videos/{request_id}/content:
+    get:
+      parameters:
+      - description: Request ID
+        in: path
+        name: request_id
+        required: true
+        type: string
+      produces:
+      - video/mp4
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "404":
+          description: Not Found
+      security:
+      - BearerAuth: []
+      summary: 下载已完成视频内容
+      tags:
+      - Videos
+  /v1/videos/edits:
+    post:
+      consumes:
+      - application/json
+      description: 官方 edits 形态。当前仅 Console + grok-imagine-video。video.url 支持 HTTPS
+        或 data:video/*;base64。大 data URL 可能触发上游鉴权过期，建议用较小 mp4 或 HTTPS。
+      parameters:
+      - description: 请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.SwaggerVideoEditRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建异步视频编辑任务
+      tags:
+      - Videos
+  /v1/videos/extensions:
+    post:
+      consumes:
+      - application/json
+      description: 官方 extensions 形态。duration 为扩展段秒数（2–10，默认 6）。当前仅 Console + grok-imagine-video。
+      parameters:
+      - description: 请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.SwaggerVideoExtendRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建异步视频扩展任务
+      tags:
+      - Videos
   /v1/videos/generations:
     post:
       consumes:
       - application/json
+      description: T2V / I2V / R2V。image 与 reference_images 互斥。Console 支持 grok-imagine-video
+        与 grok-imagine-video-1.5（1.5 可 1080p）。返回 request_id 后用 GET /v1/videos/{request_id}
+        轮询。
       parameters:
       - description: 请求
         in: body
@@ -502,13 +631,7 @@ paths:
             type: object
       security:
       - BearerAuth: []
-      summary: 创建异步视频任务
+      summary: 创建异步视频生成任务
       tags:
       - Videos
-securityDefinitions:
-  BearerAuth:
-    description: 使用 "Bearer g2a_xxx_xxx"。
-    in: header
-    name: Authorization
-    type: apiKey
 swagger: "2.0"

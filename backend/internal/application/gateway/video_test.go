@@ -351,3 +351,30 @@ func (r *videoUsageRepository) MarkMediaJobUsageRecorded(_ context.Context, _ st
 	r.job.UsageRecordedAt = &recordedAt
 	return nil
 }
+
+type stubHTTPStatusError struct {
+	status  int
+	message string
+}
+
+func (e stubHTTPStatusError) Error() string          { return e.message }
+func (e stubHTTPStatusError) HTTPStatusCode() int    { return e.status }
+
+func TestClassifyVideoGenerationFailure(t *testing.T) {
+	code, pub := classifyVideoGenerationFailure(&InvalidRequestError{Message: "image 与 reference_images 不能同时使用"})
+	if code != "invalid_argument" || !strings.Contains(pub.Error(), "不能同时") {
+		t.Fatalf("invalid request classify = %s %v", code, pub)
+	}
+	code, pub = classifyVideoGenerationFailure(stubHTTPStatusError{status: http.StatusTooManyRequests, message: "slow"})
+	if code != "rate_limited" || !strings.Contains(pub.Error(), "速率") {
+		t.Fatalf("rate limit classify = %s %v", code, pub)
+	}
+	code, pub = classifyVideoGenerationFailure(stubHTTPStatusError{status: http.StatusBadRequest, message: "bad prompt"})
+	if code != "invalid_argument" {
+		t.Fatalf("bad request classify = %s %v", code, pub)
+	}
+	code, pub = classifyVideoGenerationFailure(errors.New("Build 最多支持 1 张首图，当前为 2 张"))
+	if code != "invalid_argument" || !strings.Contains(pub.Error(), "image 输入") {
+		t.Fatalf("legacy wording classify = %s %v", code, pub)
+	}
+}

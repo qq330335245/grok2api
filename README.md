@@ -276,9 +276,10 @@ Console uses the catalog built into the current release. Conversation forwarding
 | `grok-build-0.1` | Conversation | Chat Completions, Responses, Messages |
 | `grok-imagine-image` | Image, Image Edit | Images Generations, Images Edits |
 | `grok-imagine-image-quality` | Image, Image Edit | Images Generations, Images Edits |
-| `grok-imagine-video` | Video | Videos |
+| `grok-imagine-video` | Video | Videos generations; **edits / extensions** (Console only) |
+| `grok-imagine-video-1.5` | Video | Videos generations (T2V/I2V/R2V; 1080p allowed) |
 
-Generation and editing capabilities for the same Console image model are grouped into one logical model row; no separate `-edit` model copy is required.
+Generation and editing capabilities for the same Console image model are grouped into one logical model row; no separate `-edit` model copy is required. Fork notes for the official Console video shapes (multi `reference_images`, 1.5, edits, extensions): [`docs/CONSOLE_VIDEO_API.md`](docs/CONSOLE_VIDEO_API.md).
 
 Public names normally omit the Provider. Internally, routes use `Build/`, `Web/`, or `Console/`; qualified names can pin a request to one source.
 
@@ -308,7 +309,9 @@ Authorization: Bearer g2a_xxx_xxx
 | `POST` | `/v1/chat/completions` | Chat Completions JSON/SSE |
 | `POST` | `/v1/messages` | Anthropic Messages JSON/SSE |
 | `POST` | `/v1/images/generations`, `/v1/images/edits` | Generate or edit images |
-| `POST`, `GET` | `/v1/videos/*` | Create and inspect video jobs |
+| `POST` | `/v1/videos/generations` | Create T2V/I2V/R2V video jobs |
+| `POST` | `/v1/videos/edits`, `/v1/videos/extensions` | Edit or extend a source video (Console) |
+| `GET` | `/v1/videos/{id}`, `/v1/videos/{id}/content` | Poll job status and download content |
 | `GET` | `/v1/media/images/{asset_id}`, `/v1/media/videos/{asset_id}` | Read archived media |
 
 Stored responses and compact depend on the selected Provider. The signed-in admin console provides live examples at `/docs`; Swagger is available only when `server.swaggerEnabled: true`.

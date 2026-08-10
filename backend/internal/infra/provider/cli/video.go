@@ -168,7 +168,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		request.ReferenceURLs = []string{first}
 	}
 	if len(request.ReferenceURLs) > buildVideoMaxImages {
-		return provider.VideoResult{}, fmt.Errorf("Build grok-imagine-video-1.5 最多支持 1 张首图，当前为 %d 张", len(request.ReferenceURLs))
+		return provider.VideoResult{}, fmt.Errorf("Build grok-imagine-video-1.5 最多支持 1 张 image 输入，当前为 %d 张", len(request.ReferenceURLs))
 	}
 	accessToken, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
 	if err != nil {
