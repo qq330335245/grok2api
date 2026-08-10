@@ -153,6 +153,13 @@ func boundDiagnosticText(value string, limit int) string {
 // 显式模式优先；auto 下仅已确认 Super 且 bot_flag_source/bfs 为 1 或 2 默认使用 XAI。
 // 其他 auto Super 账号仅在当次 Build 创建返回 403 后探测 XAI。
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
+	switch mode := strings.ToLower(strings.TrimSpace(request.Mode)); mode {
+	case "", provider.VideoModeGenerate:
+	case provider.VideoModeEdit, provider.VideoModeExtend:
+		return provider.VideoResult{}, fmt.Errorf("Build 暂不支持视频编辑/扩展，请使用 Console 路由（/v1/videos/edits 或 /v1/videos/extensions）")
+	default:
+		return provider.VideoResult{}, fmt.Errorf("不支持的视频模式: %s", mode)
+	}
 	// Normalize official first-frame field onto ReferenceURLs for the existing single-image Build payload.
 	if first := strings.TrimSpace(request.FirstFrameURL); first != "" {
 		if len(request.ReferenceURLs) > 0 {

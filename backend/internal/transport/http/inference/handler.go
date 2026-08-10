@@ -88,6 +88,8 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/images/generations", h.generateImage)
 	router.POST("/images/edits", h.editImage)
 	router.POST("/videos/generations", h.generateVideo)
+	router.POST("/videos/edits", h.editVideo)
+	router.POST("/videos/extensions", h.extendVideo)
 	router.GET("/videos/:requestId", h.getVideo)
 	router.GET("/videos/:requestId/content", h.getVideoContent)
 	router.POST("/responses/compact", h.compactResponse)
@@ -165,6 +167,15 @@ type videoGenerationRequest struct {
 	ReferenceImages []videoGenerationImage `json:"reference_images"`
 	Output          json.RawMessage        `json:"output"`
 	StorageOptions  json.RawMessage        `json:"storage_options"`
+}
+
+type videoMutationRequest struct {
+	Model          string                `json:"model"`
+	Prompt         string                `json:"prompt"`
+	Duration       json.RawMessage       `json:"duration"`
+	Video          *videoGenerationImage `json:"video"`
+	Output         json.RawMessage       `json:"output"`
+	StorageOptions json.RawMessage       `json:"storage_options"`
 }
 
 type modelListItem struct {
@@ -689,8 +700,87 @@ func (h *Handler) generateVideo(c *gin.Context) {
 	}
 	job, err := h.gateway.CreateVideo(c.Request.Context(), gateway.VideoInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model,
-		Prompt: prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
+		Mode: gatewayVideoModeGenerate, Prompt: prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
 		FirstFrameURL: firstFrameURL, ReferenceURLs: referenceURLs,
+	})
+	if err != nil {
+		writeGatewayError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"request_id": job.ID})
+}
+
+const (
+	gatewayVideoModeGenerate = "generate"
+	gatewayVideoModeEdit     = "edit"
+	gatewayVideoModeExtend   = "extend"
+)
+
+func (h *Handler) editVideo(c *gin.Context) {
+	h.createVideoMutation(c, gatewayVideoModeEdit)
+}
+
+func (h *Handler) extendVideo(c *gin.Context) {
+	h.createVideoMutation(c, gatewayVideoModeExtend)
+}
+
+func (h *Handler) createVideoMutation(c *gin.Context, mode string) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxBodyBytes)
+	if !isJSONRequest(c) {
+		writeOpenAIError(c, http.StatusUnsupportedMediaType, "invalid_request", "视频编辑/扩展仅支持 application/json")
+		return
+	}
+	var request videoMutationRequest
+	if err := decodeSingleJSON(c.Request.Body, &request, true); err != nil {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "视频请求 JSON 无效: "+err.Error())
+		return
+	}
+	if hasJSONValue(request.Output) {
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 output.upload_url")
+		return
+	}
+	if hasJSONValue(request.StorageOptions) {
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 storage_options")
+		return
+	}
+	model := strings.TrimSpace(request.Model)
+	prompt := strings.TrimSpace(request.Prompt)
+	if model == "" {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "缺少有效 model")
+		return
+	}
+	if prompt == "" {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "视频编辑/扩展必须提供 prompt")
+		return
+	}
+	if request.Video == nil {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "视频编辑/扩展必须提供 video")
+		return
+	}
+	sourceVideoURL, err := resolveVideoGenerationMedia(*request.Video, "video")
+	if err != nil {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	duration := 0
+	if mode == gatewayVideoModeExtend {
+		duration, err = parseVideoExtendDuration(request.Duration)
+		if err != nil {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+	} else if hasJSONValue(request.Duration) {
+		// Edit does not take duration; reject unexpected values to avoid silent ignore surprises.
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "视频编辑不支持 duration")
+		return
+	}
+	clientKey, requestID, ok := requestIdentity(c)
+	if !ok {
+		return
+	}
+	job, err := h.gateway.CreateVideo(c.Request.Context(), gateway.VideoInput{
+		RequestID: requestID, ClientKey: clientKey, PublicModel: model,
+		Mode: mode, Prompt: prompt, Duration: duration, SourceVideoURL: sourceVideoURL,
 	})
 	if err != nil {
 		writeGatewayError(c, err)
@@ -777,15 +867,34 @@ func parseVideoDuration(durationRaw json.RawMessage) (int, error) {
 	return value, nil
 }
 
+func parseVideoExtendDuration(durationRaw json.RawMessage) (int, error) {
+	duration, hasDuration, err := parseOptionalVideoInteger(durationRaw)
+	if err != nil {
+		return 0, fmt.Errorf("duration 必须是整数或整数字符串")
+	}
+	value := 6
+	if hasDuration {
+		value = duration
+	}
+	if value < 2 || value > 10 {
+		return 0, fmt.Errorf("视频扩展 duration 必须在 2 到 10 秒之间")
+	}
+	return value, nil
+}
+
 func resolveVideoGenerationImage(input videoGenerationImage) (string, error) {
+	return resolveVideoGenerationMedia(input, "image")
+}
+
+func resolveVideoGenerationMedia(input videoGenerationImage, field string) (string, error) {
 	urlValue := strings.TrimSpace(input.URL)
 	fileID := strings.TrimSpace(input.FileID)
 	if (urlValue == "") == (fileID == "") {
-		return "", errors.New("每个 image 必须且只能提供 url 或 file_id")
+		return "", fmt.Errorf("每个 %s 必须且只能提供 url 或 file_id", field)
 	}
 	if fileID != "" {
 		if !mediadomain.IsInputAssetID(fileID) {
-			return "", errors.New("image.file_id 无效")
+			return "", fmt.Errorf("%s.file_id 无效", field)
 		}
 		return gateway.VideoInputFileReference(fileID), nil
 	}

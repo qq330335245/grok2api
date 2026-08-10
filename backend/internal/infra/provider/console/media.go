@@ -394,6 +394,10 @@ func trustedConsoleImageHost(host string) bool {
 }
 
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
+	mode := strings.ToLower(strings.TrimSpace(request.Mode))
+	if mode == "" {
+		mode = provider.VideoModeGenerate
+	}
 	modelName := strings.TrimSpace(request.UpstreamModel)
 	if modelName == "" {
 		modelName = "grok-imagine-video"
@@ -401,63 +405,23 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if !ResolveMedia(modelName, modeldomain.CapabilityVideo) {
 		return provider.VideoResult{}, fmt.Errorf("Console 视频模型未注册: %s", modelName)
 	}
-	firstFrame := strings.TrimSpace(request.FirstFrameURL)
-	references := make([]string, 0, len(request.ReferenceURLs))
-	for _, raw := range request.ReferenceURLs {
-		if value := strings.TrimSpace(raw); value != "" {
-			references = append(references, value)
-		}
+	createPath := "/videos/generations"
+	var payload map[string]any
+	var err error
+	switch mode {
+	case provider.VideoModeGenerate:
+		payload, err = buildConsoleVideoGeneratePayload(modelName, request)
+	case provider.VideoModeEdit:
+		createPath = "/videos/edits"
+		payload, err = buildConsoleVideoEditPayload(modelName, request)
+	case provider.VideoModeExtend:
+		createPath = "/videos/extensions"
+		payload, err = buildConsoleVideoExtendPayload(modelName, request)
+	default:
+		return provider.VideoResult{}, fmt.Errorf("不支持的 Console 视频模式: %s", mode)
 	}
-	// Legacy jobs may only populate ReferenceURLs with a single I2V frame.
-	if firstFrame == "" && len(references) == 1 {
-		firstFrame, references = references[0], nil
-	}
-	if firstFrame != "" && len(references) > 0 {
-		return provider.VideoResult{}, errors.New("image 与 reference_images 不能同时使用")
-	}
-	if len(references) > consoleMaxVideoImages {
-		return provider.VideoResult{}, fmt.Errorf("Console reference_images 最多支持 %d 张，当前为 %d 张", consoleMaxVideoImages, len(references))
-	}
-	if request.Duration < 1 || request.Duration > 15 {
-		return provider.VideoResult{}, errors.New("duration 必须在 1 到 15 秒之间")
-	}
-	if err := validateConsoleVideoResolution(modelName, request.Resolution); err != nil {
+	if err != nil {
 		return provider.VideoResult{}, err
-	}
-	payload := map[string]any{
-		"model": modelName, "duration": request.Duration,
-	}
-	if prompt := strings.TrimSpace(request.Prompt); prompt != "" {
-		payload["prompt"] = prompt
-	}
-	if ratio := strings.TrimSpace(request.AspectRatio); ratio != "" {
-		payload["aspect_ratio"] = ratio
-	}
-	if resolution := strings.TrimSpace(request.Resolution); resolution != "" {
-		payload["resolution"] = resolution
-	}
-	if firstFrame != "" {
-		if !validConsoleMediaInputURL(firstFrame, "image") {
-			return provider.VideoResult{}, errors.New("视频首图必须是 HTTPS URL 或 image data URL")
-		}
-		payload["image"] = map[string]any{"url": firstFrame}
-	}
-	if len(references) > 0 {
-		refs := make([]map[string]any, 0, len(references))
-		for _, value := range references {
-			if !validConsoleMediaInputURL(value, "image") {
-				return provider.VideoResult{}, errors.New("reference_images 必须是 HTTPS URL 或 image data URL")
-			}
-			refs = append(refs, map[string]any{"url": value})
-		}
-		payload["reference_images"] = refs
-	}
-	if _, hasPrompt := payload["prompt"]; !hasPrompt {
-		if _, hasImage := payload["image"]; !hasImage {
-			if _, hasRefs := payload["reference_images"]; !hasRefs {
-				return provider.VideoResult{}, errors.New("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
-			}
-		}
 	}
 
 	token, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
@@ -474,7 +438,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		return provider.VideoResult{}, err
 	}
 	baseURL := a.config().BaseURL
-	created, err := a.doConsoleVideoJSON(ctx, request.Credential, token, lease, http.MethodPost, consoleV1Endpoint(baseURL, "/videos/generations"), body)
+	created, err := a.doConsoleVideoJSON(ctx, request.Credential, token, lease, http.MethodPost, consoleV1Endpoint(baseURL, createPath), body)
 	if err != nil {
 		return provider.VideoResult{}, err
 	}
@@ -505,6 +469,129 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		case <-ticker.C:
 		}
 	}
+}
+
+func buildConsoleVideoGeneratePayload(modelName string, request provider.VideoRequest) (map[string]any, error) {
+	firstFrame := strings.TrimSpace(request.FirstFrameURL)
+	references := make([]string, 0, len(request.ReferenceURLs))
+	for _, raw := range request.ReferenceURLs {
+		if value := strings.TrimSpace(raw); value != "" {
+			references = append(references, value)
+		}
+	}
+	// Legacy jobs may only populate ReferenceURLs with a single I2V frame.
+	if firstFrame == "" && len(references) == 1 {
+		firstFrame, references = references[0], nil
+	}
+	if firstFrame != "" && len(references) > 0 {
+		return nil, errors.New("image 与 reference_images 不能同时使用")
+	}
+	if len(references) > consoleMaxVideoImages {
+		return nil, fmt.Errorf("Console reference_images 最多支持 %d 张，当前为 %d 张", consoleMaxVideoImages, len(references))
+	}
+	if request.Duration < 1 || request.Duration > 15 {
+		return nil, errors.New("duration 必须在 1 到 15 秒之间")
+	}
+	if err := validateConsoleVideoResolution(modelName, request.Resolution); err != nil {
+		return nil, err
+	}
+	payload := map[string]any{
+		"model": modelName, "duration": request.Duration,
+	}
+	if prompt := strings.TrimSpace(request.Prompt); prompt != "" {
+		payload["prompt"] = prompt
+	}
+	if ratio := strings.TrimSpace(request.AspectRatio); ratio != "" {
+		payload["aspect_ratio"] = ratio
+	}
+	if resolution := strings.TrimSpace(request.Resolution); resolution != "" {
+		payload["resolution"] = resolution
+	}
+	if firstFrame != "" {
+		if !validConsoleMediaInputURL(firstFrame, "image") {
+			return nil, errors.New("视频首图必须是 HTTPS URL 或 image data URL")
+		}
+		payload["image"] = map[string]any{"url": firstFrame}
+	}
+	if len(references) > 0 {
+		refs := make([]map[string]any, 0, len(references))
+		for _, value := range references {
+			if !validConsoleMediaInputURL(value, "image") {
+				return nil, errors.New("reference_images 必须是 HTTPS URL 或 image data URL")
+			}
+			refs = append(refs, map[string]any{"url": value})
+		}
+		payload["reference_images"] = refs
+	}
+	if _, hasPrompt := payload["prompt"]; !hasPrompt {
+		if _, hasImage := payload["image"]; !hasImage {
+			if _, hasRefs := payload["reference_images"]; !hasRefs {
+				return nil, errors.New("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
+			}
+		}
+	}
+	return payload, nil
+}
+
+func buildConsoleVideoEditPayload(modelName string, request provider.VideoRequest) (map[string]any, error) {
+	if err := requireConsoleEditExtendModel(modelName); err != nil {
+		return nil, err
+	}
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		return nil, errors.New("视频编辑必须提供 prompt")
+	}
+	source, err := requireConsoleSourceVideo(request.SourceVideoURL)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"model":  modelName,
+		"prompt": prompt,
+		"video":  map[string]any{"url": source},
+	}, nil
+}
+
+func buildConsoleVideoExtendPayload(modelName string, request provider.VideoRequest) (map[string]any, error) {
+	if err := requireConsoleEditExtendModel(modelName); err != nil {
+		return nil, err
+	}
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		return nil, errors.New("视频扩展必须提供 prompt")
+	}
+	if request.Duration < 2 || request.Duration > 10 {
+		return nil, errors.New("视频扩展 duration 必须在 2 到 10 秒之间")
+	}
+	source, err := requireConsoleSourceVideo(request.SourceVideoURL)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"model":    modelName,
+		"prompt":   prompt,
+		"duration": request.Duration,
+		"video":    map[string]any{"url": source},
+	}, nil
+}
+
+func requireConsoleEditExtendModel(modelName string) error {
+	// Official Console probes only succeed with grok-imagine-video for edit/extend today.
+	if !strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video") {
+		return errors.New("视频编辑/扩展仅支持 grok-imagine-video")
+	}
+	return nil
+}
+
+func requireConsoleSourceVideo(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", errors.New("视频编辑/扩展必须提供 video.url")
+	}
+	if !validConsoleMediaInputURL(value, "video") {
+		return "", errors.New("video.url 必须是 HTTPS URL 或 video data URL")
+	}
+	return value, nil
 }
 
 func (a *Adapter) doConsoleVideoJSON(ctx context.Context, credential account.Credential, token string, lease *infraegress.Lease, method, endpoint string, body []byte) ([]byte, error) {

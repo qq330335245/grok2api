@@ -273,12 +273,21 @@ type ImageEditRequest struct {
 	PartialImages  int
 }
 
+// Video operation modes for GenerateVideo (generate is the default empty value).
+const (
+	VideoModeGenerate = "generate"
+	VideoModeEdit     = "edit"
+	VideoModeExtend   = "extend"
+)
+
 type VideoRequest struct {
 	Credential account.Credential
 	// Billing is used only to determine XAI eligibility in Build auto mode; nil means the account tier is unknown.
 	Billing *account.Billing
 	// JobID binds the local video job to XAI ZDR upload tickets and result assets.
 	JobID string
+	// Mode is generate (default), edit, or extend.
+	Mode   string
 	Prompt string
 	Duration int
 	AspectRatio string
@@ -289,6 +298,8 @@ type VideoRequest struct {
 	// ReferenceURLs are reference-to-video guides (official `reference_images`).
 	// They must not be confused with FirstFrameURL.
 	ReferenceURLs []string
+	// SourceVideoURL is the source clip for edit/extend (official `video.url`).
+	SourceVideoURL string
 	// UpstreamModel is the provider-facing model id (e.g. grok-imagine-video-1.5).
 	UpstreamModel string
 	Progress      func(int)

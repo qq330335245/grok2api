@@ -208,6 +208,13 @@ func boundWebMediaDiagnostic(value string, limit int) string {
 }
 
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
+	switch mode := strings.ToLower(strings.TrimSpace(request.Mode)); mode {
+	case "", provider.VideoModeGenerate:
+	case provider.VideoModeEdit, provider.VideoModeExtend:
+		return provider.VideoResult{}, fmt.Errorf("Web 暂不支持视频编辑/扩展，请使用 Console 路由（/v1/videos/edits 或 /v1/videos/extensions）")
+	default:
+		return provider.VideoResult{}, fmt.Errorf("不支持的视频模式: %s", mode)
+	}
 	cfg := a.config()
 	token, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
 	if err != nil {

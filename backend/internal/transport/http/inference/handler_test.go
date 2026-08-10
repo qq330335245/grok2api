@@ -113,6 +113,33 @@ func TestVideoGenerationUsesOfficialXAIEndpointsAndFields(t *testing.T) {
 	if contentRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("video content endpoint status=%d", contentRecorder.Code)
 	}
+
+	// Edit/extend accept official shapes up to auth; reject bad duration and missing video.
+	editOK := httptest.NewRequest(http.MethodPost, "/v1/videos/edits", strings.NewReader(`{
+		"model":"grok-imagine-video","prompt":"grade","video":{"url":"https://example.com/a.mp4"}
+	}`))
+	editOK.Header.Set("Content-Type", "application/json")
+	editRecorder := httptest.NewRecorder()
+	router.ServeHTTP(editRecorder, editOK)
+	if editRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("edit shape status=%d body=%s", editRecorder.Code, editRecorder.Body.String())
+	}
+	extendBad := httptest.NewRequest(http.MethodPost, "/v1/videos/extensions", strings.NewReader(`{
+		"model":"grok-imagine-video","prompt":"more","duration":15,"video":{"url":"https://example.com/a.mp4"}
+	}`))
+	extendBad.Header.Set("Content-Type", "application/json")
+	extendRecorder := httptest.NewRecorder()
+	router.ServeHTTP(extendRecorder, extendBad)
+	if extendRecorder.Code != http.StatusBadRequest || !strings.Contains(extendRecorder.Body.String(), "2 到 10") {
+		t.Fatalf("extend duration status=%d body=%s", extendRecorder.Code, extendRecorder.Body.String())
+	}
+	missingVideo := httptest.NewRequest(http.MethodPost, "/v1/videos/edits", strings.NewReader(`{"model":"grok-imagine-video","prompt":"x"}`))
+	missingVideo.Header.Set("Content-Type", "application/json")
+	missingRecorder := httptest.NewRecorder()
+	router.ServeHTTP(missingRecorder, missingVideo)
+	if missingRecorder.Code != http.StatusBadRequest || !strings.Contains(missingRecorder.Body.String(), "video") {
+		t.Fatalf("missing video status=%d body=%s", missingRecorder.Code, missingRecorder.Body.String())
+	}
 }
 
 func TestWriteVideoContentRejectsDeclaredOversizeMedia(t *testing.T) {

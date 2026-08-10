@@ -239,11 +239,11 @@ Mode            generate | edit | extend
 
 ### Phase 2 — edits / extensions（P0-4,5）
 
-1. Handler 注册路由  
-2. Gateway `CreateVideoEdit` / `CreateVideoExtend`（或统一 Mode）  
-3. Console 出站 + 轮询复用  
-4. 文档与单测  
-5. 大视频 data URL 说明/可选中转  
+1. [x] Handler 注册 `/v1/videos/edits`、`/v1/videos/extensions`  
+2. [x] Gateway 统一 `Mode`（generate|edit|extend）+ `SourceVideoURL`  
+3. [x] Console 出站 edits/extensions + 轮询复用；Web/Build 明确拒绝  
+4. [x] 相关单测（console payload 路径、handler 校验）  
+5. [ ] 大视频 data URL 说明/可选中转（Phase 3 文档）  
 
 ### Phase 3 — 打磨（P1）
 
@@ -310,4 +310,5 @@ Mode            generate | edit | extend
 |------|------|
 | 2026-08-10 | 旁路实测 gen/R2V/1.5/edit/extend；计划定稿 |
 | 2026-08-10 | 确认 `qq330335245/grok2api` 已是官方 fork 且与 `chenyme/grok2api@main` **identical**（v3.1.2）；旧定制在独立仓 `grok2api-egress-enhanced`，本期不混入。开发分支 `feat/console-video-official-capabilities` |
-| （实施中） | Phase 1… |
+| 2026-08-10 | Phase 1：image/reference 分流、多参考 R2V、Console 1.5（`f711ba1`） |
+| 2026-08-10 | Phase 2：edits/extensions 端到端（Console 优先） |

@@ -94,7 +94,7 @@ func inferenceBodyOperation(path string) string {
 		return "image_generation"
 	case "/v1/images/edits":
 		return "image_edit"
-	case "/v1/videos/generations":
+	case "/v1/videos/generations", "/v1/videos/edits", "/v1/videos/extensions":
 		return "video_generation"
 	default:
 		return "other"

@@ -1330,6 +1330,80 @@ func TestConsoleVideoSendsReferenceImagesAndFirstFrameSeparately(t *testing.T) {
 	}
 }
 
+func TestConsoleVideoEditAndExtendPaths(t *testing.T) {
+	var posts []struct {
+		Path string
+		Body map[string]any
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if serveTestDPoPToken(t, writer, request) {
+			return
+		}
+		verifyTestDPoPProof(t, request)
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && (request.URL.Path == "/v1/videos/edits" || request.URL.Path == "/v1/videos/extensions"):
+			var payload map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Error(err)
+			}
+			posts = append(posts, struct {
+				Path string
+				Body map[string]any
+			}{Path: request.URL.Path, Body: payload})
+			id := "edit-1"
+			if request.URL.Path == "/v1/videos/extensions" {
+				id = "extend-1"
+			}
+			_, _ = writer.Write([]byte(`{"request_id":"` + id + `"}`))
+		case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/videos/"):
+			id := strings.TrimPrefix(request.URL.Path, "/v1/videos/")
+			_, _ = writer.Write([]byte(`{"status":"done","progress":100,"video":{"url":"https://vidgen.x.ai/` + id + `.mp4"}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	adapter, credential := newConsoleTestAdapter(t, server.URL)
+
+	edit, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Mode: provider.VideoModeEdit, Prompt: "cinematic grade",
+		UpstreamModel: "grok-imagine-video", SourceVideoURL: "https://cdn.example.com/clip.mp4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edit.URL != "https://vidgen.x.ai/edit-1.mp4" {
+		t.Fatalf("edit result = %#v", edit)
+	}
+
+	extend, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Mode: provider.VideoModeExtend, Prompt: "continue motion", Duration: 6,
+		UpstreamModel: "grok-imagine-video", SourceVideoURL: "data:video/mp4;base64,AAAA",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if extend.URL != "https://vidgen.x.ai/extend-1.mp4" {
+		t.Fatalf("extend result = %#v", extend)
+	}
+	if len(posts) != 2 || posts[0].Path != "/v1/videos/edits" || posts[1].Path != "/v1/videos/extensions" {
+		t.Fatalf("posts = %#v", posts)
+	}
+	if posts[0].Body["video"].(map[string]any)["url"] != "https://cdn.example.com/clip.mp4" {
+		t.Fatalf("edit video = %#v", posts[0].Body["video"])
+	}
+	if posts[1].Body["duration"] != float64(6) {
+		t.Fatalf("extend duration = %#v", posts[1].Body["duration"])
+	}
+	if _, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Mode: provider.VideoModeEdit, Prompt: "x",
+		UpstreamModel: "grok-imagine-video-1.5", SourceVideoURL: "https://cdn.example.com/clip.mp4",
+	}); err == nil || !strings.Contains(err.Error(), "仅支持 grok-imagine-video") {
+		t.Fatalf("1.5 edit error = %v", err)
+	}
+}
+
 func TestParseConsoleVideoStatusRejectsUnknownState(t *testing.T) {
 	if _, _, err := parseConsoleVideoStatus([]byte(`{"status":"mystery"}`), nil); err == nil || !strings.Contains(err.Error(), "状态无效") {
 		t.Fatalf("unknown status error = %v", err)
