@@ -890,10 +890,20 @@ func classifyVideoGenerationFailure(err error) (code string, public error) {
 	if errors.Is(err, provider.ErrUnauthorized) {
 		return "provider_unavailable", errors.New("上游服务暂不可用")
 	}
+	message := err.Error()
+	lower := strings.ToLower(message)
+	// Prefer specific, actionable mappings before generic fallbacks.
+	if strings.Contains(lower, "auth context expired") || strings.Contains(lower, "auth_context_expired") {
+		return "auth_expired", errors.New("Console 鉴权已过期，请重新导入或刷新 Console SSO")
+	}
 	if status, ok := provider.ErrorHTTPStatus(err); ok {
 		switch {
 		case status == http.StatusUnauthorized || status == http.StatusForbidden:
-			return "provider_unavailable", errors.New("上游服务暂不可用")
+			// Keep upstream text when present; otherwise a stable auth hint.
+			if strings.TrimSpace(message) != "" && !strings.EqualFold(message, provider.ErrUnauthorized.Error()) {
+				return "auth_expired", publicVideoClientMessage(err)
+			}
+			return "auth_expired", errors.New("Console 鉴权失效，请重新导入或刷新 Console SSO")
 		case status == http.StatusTooManyRequests:
 			return "rate_limited", errors.New("上游视频额度或速率受限，请稍后重试")
 		case status == http.StatusPaymentRequired:
@@ -901,11 +911,10 @@ func classifyVideoGenerationFailure(err error) (code string, public error) {
 		case status == http.StatusBadRequest:
 			return "invalid_argument", publicVideoClientMessage(err)
 		case status >= http.StatusInternalServerError:
-			return "generation_failed", errors.New("上游视频生成失败，请稍后重试")
+			// Surface sanitized upstream detail instead of a fixed "请稍后重试".
+			return "generation_failed", publicVideoClientMessage(err)
 		}
 	}
-	message := err.Error()
-	lower := strings.ToLower(message)
 	switch {
 	case strings.Contains(message, "不能同时"), strings.Contains(message, "必须提供"),
 		strings.Contains(message, "仅支持"), strings.Contains(message, "不支持"),
