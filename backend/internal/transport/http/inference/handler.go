@@ -1841,8 +1841,7 @@ func writeGatewayError(c *gin.Context, err error) {
 		message = "当前没有可用的上游账号"
 	default:
 		// Keep generic copy for unknown errors so internal dial/DB strings never leak.
-		// Typed failures above (UpstreamFailure.PublicMessage, InvalidRequest, video input, …)
-		already carry actionable client text.
+		// Typed failures above already carry actionable client text.
 		if err != nil {
 			code = "gateway_error"
 			message = "上游服务暂不可用"
