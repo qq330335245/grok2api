@@ -1839,6 +1839,12 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrResponseAccountUnavailable), errors.Is(err, gateway.ErrNoAvailableAccount):
 		status, code = http.StatusServiceUnavailable, "upstream_unavailable"
 		message = "当前没有可用的上游账号"
+	default:
+		// Surface the real gateway error instead of a fixed 502 blur; still Bad Gateway.
+		if err != nil {
+			message = err.Error()
+			code = "gateway_error"
+		}
 	}
 	writeOpenAIError(c, status, code, message)
 }

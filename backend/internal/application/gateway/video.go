@@ -70,11 +70,16 @@ func normalizeVideoMode(mode string) string {
 	}
 }
 
-func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job, error) {
+func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (job media.Job, err error) {
 	if s.mediaJobs == nil || s.mediaQueue == nil {
 		return media.Job{}, fmt.Errorf("视频任务服务未配置")
 	}
 	mode := normalizeVideoMode(input.Mode)
+	defer func() {
+		if err != nil && s.logger != nil {
+			s.logger.Warn("video_create_failed", "mode", mode, "model", input.PublicModel, "error", err)
+		}
+	}()
 	firstFrame := strings.TrimSpace(input.FirstFrameURL)
 	references := trimVideoURLList(input.ReferenceURLs)
 	sourceVideo := strings.TrimSpace(input.SourceVideoURL)
@@ -154,12 +159,26 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		return media.Job{}, err
 	}
 	now := time.Now().UTC()
-	job := media.Job{
+	// media_jobs CHECKs require seconds∈[1,15] and non-empty size/quality.
+	// Edit has no client duration/ratio/resolution; extend has duration only.
+	seconds := input.Duration
+	if seconds < 1 || seconds > 15 {
+		seconds = 1 // placeholder for edit (and any out-of-range); not used for billing when ≤0 was estimated
+	}
+	size := strings.TrimSpace(input.AspectRatio)
+	if size == "" {
+		size = "source"
+	}
+	quality := strings.TrimSpace(input.Resolution)
+	if quality == "" {
+		quality = "source"
+	}
+	job = media.Job{
 		ID: "video_" + token, RequestID: input.RequestID,
 		ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name,
 		AccountID: accountID, AccountName: lease.Credential.Name,
 		Provider: string(route.Provider), Model: externalModel, ModelRouteID: route.ID, UpstreamModel: model.DisplayUpstreamModel(route.Provider, route.UpstreamModel), Prompt: input.Prompt,
-		Seconds: input.Duration, Size: input.AspectRatio, Quality: input.Resolution,
+		Seconds: seconds, Size: size, Quality: quality,
 		Status: media.StatusQueued, Progress: 0, InputJSON: inputJSON, InputImageCount: len(allRefs), CreatedAt: now, UpdatedAt: now,
 	}
 	reserved := false
@@ -169,7 +188,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 			return media.Job{}, err
 		}
 	}
-	if err := s.mediaJobs.CreateMediaJob(ctx, job); err != nil {
+	if err = s.mediaJobs.CreateMediaJob(ctx, job); err != nil {
 		if reserved {
 			s.cancelBillingReservation("video_usage_" + job.ID)
 		}
