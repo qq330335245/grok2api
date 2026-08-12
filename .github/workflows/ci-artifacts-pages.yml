@@ -1,0 +1,140 @@
+# Lab-friendly CI: build on GitHub (not p30) → artifacts + optional Cloudflare Pages admin UI.
+# Backend binary stays local/runtime; this does NOT deploy to 老家盒子 production.
+#
+# Secrets (same as infinite-canvas fork):
+#   CLOUDFLARE_API_TOKEN
+#   CLOUDFLARE_ACCOUNT_ID
+name: CI artifacts + Admin Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "feat/**"
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - "Dockerfile"
+      - ".github/workflows/ci-artifacts-pages.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/ci-artifacts-pages.yml"
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: ci-artifacts-pages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          # Root path for Pages / embedded staticPath
+          VITE_BASE: /
+        run: pnpm build
+
+      - name: SPA fallback
+        run: |
+          test -f frontend/dist/index.html
+          cp frontend/dist/index.html frontend/dist/404.html
+          test -f frontend/dist/_redirects || printf '%s\n' '/*    /index.html   200' > frontend/dist/_redirects
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grok2api-frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: arm64
+            name: linux-arm64
+          - goos: linux
+            goarch: amd64
+            name: linux-amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Test
+        if: matrix.goarch == 'amd64'
+        working-directory: backend
+        run: go test ./...
+
+      - name: Build binary
+        working-directory: backend
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -trimpath -ldflags="-s -w" -o "grok2api-${{ matrix.name }}" ./cmd/grok2api
+          ls -la "grok2api-${{ matrix.name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grok2api-binary-${{ matrix.name }}
+          path: backend/grok2api-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy-admin-pages:
+    # Static admin UI only (HTTPS). Point Base URL / publicApi in UI at your API tunnel.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feat/')))
+    needs: frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: cloudflare-pages-admin
+      url: https://grok2api-admin.pages.dev
+    steps:
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: grok2api-frontend-dist
+          path: frontend/dist
+
+      - name: Deploy admin UI to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # New project auto-created on first deploy if missing
+          command: pages deploy frontend/dist --project-name=grok2api-admin --commit-dirty=true

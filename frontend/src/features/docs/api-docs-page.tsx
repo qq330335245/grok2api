@@ -134,13 +134,38 @@ const endpoints: Record<string, EndpointDefinition> = {
     request: (model) => ({ model, prompt: "A paper airplane flying over a city", duration: 8, aspect_ratio: "16:9", resolution: "720p" }),
     response: { request_id: "video_example" },
   },
+  "video/edits": {
+    key: "video/edits", category: "Video", title: "Video edits", method: "POST", path: "/videos/edits",
+    descriptionKey: "docs.endpointVideoEdit", capabilities: ["video"],
+    fields: [
+      { name: "model", required: true, descriptionKey: "docs.reference.fieldModel" },
+      { name: "prompt", required: true, descriptionKey: "docs.reference.fieldVideoEditPrompt" },
+      { name: "video", required: true, descriptionKey: "docs.reference.fieldSourceVideo" },
+    ],
+    noteKeys: ["docs.reference.noteVideoEdit", "docs.reference.noteVideoAsync", "docs.reference.noteVideoStrict"],
+    request: (model) => ({ model, prompt: "Add a gentle cinematic color grade", video: { url: "https://example.com/source.mp4" } }),
+    response: { request_id: "video_edit_example" },
+  },
+  "video/extensions": {
+    key: "video/extensions", category: "Video", title: "Video extensions", method: "POST", path: "/videos/extensions",
+    descriptionKey: "docs.endpointVideoExtend", capabilities: ["video"],
+    fields: [
+      { name: "model", required: true, descriptionKey: "docs.reference.fieldModel" },
+      { name: "prompt", required: true, descriptionKey: "docs.reference.fieldVideoExtendPrompt" },
+      { name: "duration", descriptionKey: "docs.reference.fieldExtendDuration" },
+      { name: "video", required: true, descriptionKey: "docs.reference.fieldSourceVideo" },
+    ],
+    noteKeys: ["docs.reference.noteVideoExtend", "docs.reference.noteVideoAsync", "docs.reference.noteVideoStrict"],
+    request: (model) => ({ model, prompt: "Continue the motion naturally", duration: 6, video: { url: "https://example.com/source.mp4" } }),
+    response: { request_id: "video_extend_example" },
+  },
   "video/get": {
     key: "video/get", category: "Video", title: "Get video", method: "GET", path: "/videos/{request_id}",
     descriptionKey: "docs.endpointVideoGet", capabilities: ["video"],
     fields: [{ name: "request_id", required: true, descriptionKey: "docs.reference.fieldRequestId" }],
     noteKeys: ["docs.reference.noteVideoPolling", "docs.reference.noteVideoStatus"],
     request: () => undefined,
-    response: { status: "done", model: "grok-imagine-video", progress: 100, video: { url: "https://example.com/generated.mp4", duration: 8, respect_moderation: true } },
+    response: { status: "pending", model: "grok-imagine-video", progress: 42 },
   },
 };
 
