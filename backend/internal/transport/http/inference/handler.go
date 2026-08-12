@@ -1840,10 +1840,12 @@ func writeGatewayError(c *gin.Context, err error) {
 		status, code = http.StatusServiceUnavailable, "upstream_unavailable"
 		message = "当前没有可用的上游账号"
 	default:
-		// Surface the real gateway error instead of a fixed 502 blur; still Bad Gateway.
+		// Keep generic copy for unknown errors so internal dial/DB strings never leak.
+		// Typed failures above (UpstreamFailure.PublicMessage, InvalidRequest, video input, …)
+		already carry actionable client text.
 		if err != nil {
-			message = err.Error()
 			code = "gateway_error"
+			message = "上游服务暂不可用"
 		}
 	}
 	writeOpenAIError(c, status, code, message)
