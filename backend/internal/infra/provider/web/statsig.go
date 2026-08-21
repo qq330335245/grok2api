@@ -319,19 +319,21 @@ func fetchStatsigMetaContent(ctx context.Context, baseURL, token string, lease *
 
 func fetchStatsigMetaContentPreferDocument(ctx context.Context, baseURL, token string, lease *infraegress.Lease, document string, do func(*http.Request) (*http.Response, error)) (string, error) {
 	document = strings.TrimSpace(document)
-	if document == "/imagine" && do != nil {
-		page, err := fetchStatsigMetaResponse(ctx, baseURL, token, lease, "/imagine", do)
-		if err == nil && (page.statusCode >= 200 && page.statusCode < 300 || page.statusCode == http.StatusNotFound) {
-			content, extractErr := extractStatsigMetaContent(page.body)
-			if extractErr == nil {
-				return content, nil
-			}
-			if !errors.Is(extractErr, errStatsigMetaMissing) {
-				return "", extractErr
-			}
-		}
+	if document != "/imagine" || do == nil {
+		return fetchStatsigMetaContentWithDo(ctx, baseURL, token, lease, do)
 	}
-	return fetchStatsigMetaContentWithDo(ctx, baseURL, token, lease, do)
+	page, err := fetchStatsigMetaResponse(ctx, baseURL, token, lease, "/imagine", do)
+	if err != nil {
+		return "", err
+	}
+	if page.statusCode >= 200 && page.statusCode < 300 || page.statusCode == http.StatusNotFound {
+		content, extractErr := extractStatsigMetaContent(page.body)
+		if extractErr == nil {
+			return content, nil
+		}
+		return "", fmt.Errorf("Grok Imagine 页缺少 grok-site-verification: %w", extractErr)
+	}
+	return "", statsigMetaStatusError("/imagine", page.statusCode)
 }
 
 func fetchStatsigMetaContentWithDo(ctx context.Context, baseURL, token string, lease *infraegress.Lease, do func(*http.Request) (*http.Response, error)) (string, error) {

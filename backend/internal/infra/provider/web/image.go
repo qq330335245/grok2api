@@ -1398,7 +1398,7 @@ func (a *Adapter) postJSON(ctx context.Context, cfg Config, lease *egress.Lease,
 
 func (a *Adapter) postJSONWithReferer(ctx context.Context, cfg Config, lease *egress.Lease, token, endpoint string, payload any, timeout time.Duration, referer string) (*http.Response, error) {
 	data, _ := json.Marshal(payload)
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 4; attempt++ {
 		requestCtx, cancel := context.WithTimeout(ctx, timeout)
 		request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(data))
 		if err != nil {
@@ -1433,9 +1433,9 @@ func (a *Adapter) postJSONWithReferer(ctx context.Context, cfg Config, lease *eg
 				return response, nil
 			}
 			// Stale Imagine page signatures are JSON 403s, not Cloudflare HTML.
-			// Refresh Statsig once and replay; the upstream rejected the request
+			// Refresh Statsig and replay; the upstream rejected the request
 			// before creating a job. Do not touch Clearance or egress health.
-			if isStalePageMediaError(upstreamErr) && attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, endpoint) {
+			if isStalePageMediaError(upstreamErr) && attempt < 3 && a.invalidateSignedStatsig(http.MethodPost, endpoint) {
 				continue
 			}
 			// Other structured JSON responses are application policy decisions.

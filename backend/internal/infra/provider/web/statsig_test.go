@@ -456,27 +456,20 @@ func TestFetchStatsigMetaPrefersImagineDocument(t *testing.T) {
 	}
 }
 
-func TestFetchStatsigMetaFallsBackWhenImagineHasNoVerification(t *testing.T) {
+func TestFetchStatsigMetaDoesNotFallBackWhenImagineHasNoVerification(t *testing.T) {
 	var paths []string
 	do := func(request *http.Request) (*http.Response, error) {
 		paths = append(paths, request.URL.Path)
-		switch request.URL.Path {
-		case "/imagine":
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<html><head></head></html>`)), Header: http.Header{}}, nil
-		case "/index":
-			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader(`<html><head></head></html>`)), Header: http.Header{}}, nil
-		case "/":
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<html><head><meta name="grok-site-verification" content="root-meta"/></head></html>`)), Header: http.Header{}}, nil
-		default:
-			t.Fatalf("unexpected path %q", request.URL.Path)
-			return nil, nil
+		if request.URL.Path != "/imagine" {
+			t.Fatalf("unexpected fallback to %q", request.URL.Path)
 		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<html><head></head></html>`)), Header: http.Header{}}, nil
 	}
-	value, err := fetchStatsigMetaContentPreferDocument(context.Background(), "https://grok.com", "sso-token", &infraegress.Lease{UserAgent: "test-agent"}, "/imagine", do)
-	if err != nil || value != "root-meta" {
-		t.Fatalf("value=%q err=%v paths=%v", value, err, paths)
+	_, err := fetchStatsigMetaContentPreferDocument(context.Background(), "https://grok.com", "sso-token", &infraegress.Lease{UserAgent: "test-agent"}, "/imagine", do)
+	if err == nil || !strings.Contains(err.Error(), "Imagine") {
+		t.Fatalf("err=%v paths=%v", err, paths)
 	}
-	if len(paths) != 3 || paths[0] != "/imagine" || paths[1] != "/index" || paths[2] != "/" {
+	if len(paths) != 1 || paths[0] != "/imagine" {
 		t.Fatalf("paths=%v", paths)
 	}
 }
