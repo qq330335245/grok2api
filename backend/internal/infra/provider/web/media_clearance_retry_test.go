@@ -32,6 +32,7 @@ func TestIsClearanceRefreshableMediaError(t *testing.T) {
 		{name: "empty challenge response", code: http.StatusForbidden, want: true},
 		{name: "cloudflare html", code: http.StatusForbidden, body: "<!doctype html><title>Just a moment...</title>", want: true},
 		{name: "structured moderation response", code: http.StatusForbidden, body: `{"error":{"code":"content-moderated","message":"rejected"}}`, want: false},
+		{name: "stale page json is not a clearance challenge", code: http.StatusForbidden, body: "{\"error\":{\"code\":7,\"message\":\"This page is out of date. Reload to continue.\",\"details\":[]}}\n", want: false},
 		{name: "server failure", code: http.StatusBadGateway, want: false},
 	}
 	for _, test := range tests {
@@ -41,6 +42,21 @@ func TestIsClearanceRefreshableMediaError(t *testing.T) {
 				t.Fatalf("refreshable=%v, want %v (kind=%q challenge=%v)", got, test.want, err.bodyKind, err.cloudflareChallenge)
 			}
 		})
+	}
+}
+
+func TestIsStalePageMediaError(t *testing.T) {
+	stale := newWebMediaUpstreamError(http.StatusForbidden, []byte("{\"error\":{\"code\":7,\"message\":\"This page is out of date. Reload to continue.\",\"details\":[]}}\n"), false)
+	if !isStalePageMediaError(stale) {
+		t.Fatalf("stale page not detected: kind=%q message=%q summary=%q", stale.bodyKind, stale.message, stale.summary)
+	}
+	moderation := newWebMediaUpstreamError(http.StatusForbidden, []byte(`{"error":{"code":"content-moderated","message":"rejected"}}`), false)
+	if isStalePageMediaError(moderation) {
+		t.Fatal("moderation JSON was classified as stale page")
+	}
+	challenge := newWebMediaUpstreamError(http.StatusForbidden, []byte("<!doctype html><title>Just a moment...</title>"), false)
+	if isStalePageMediaError(challenge) {
+		t.Fatal("HTML challenge was classified as stale page")
 	}
 }
 

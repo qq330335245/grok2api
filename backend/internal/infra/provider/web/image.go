@@ -1432,8 +1432,14 @@ func (a *Adapter) postJSONWithReferer(ctx context.Context, cfg Config, lease *eg
 				_ = a.invalidateSignedStatsig(http.MethodPost, endpoint)
 				return response, nil
 			}
-			// Structured JSON responses are application policy decisions. They
-			// must not invalidate Clearance, affect egress health, or be replayed.
+			// Stale Imagine page signatures are JSON 403s, not Cloudflare HTML.
+			// Refresh Statsig once and replay; the upstream rejected the request
+			// before creating a job. Do not touch Clearance or egress health.
+			if isStalePageMediaError(upstreamErr) && attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, endpoint) {
+				continue
+			}
+			// Other structured JSON responses are application policy decisions.
+			// They must not invalidate Clearance, affect egress health, or be replayed.
 			if upstreamErr.bodyKind == "json" || attempt > 0 || !a.invalidateSignedStatsig(http.MethodPost, endpoint) {
 				return response, nil
 			}

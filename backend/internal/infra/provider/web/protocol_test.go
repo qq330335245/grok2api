@@ -1689,6 +1689,91 @@ func TestParseVideoStreamUsesModelResponseAttachment(t *testing.T) {
 	}
 }
 
+func TestGenerateVideoRetriesStalePageForbiddenOnce(t *testing.T) {
+	var conversations int
+	var signerCalls int
+	staleBody := "{\"error\":{\"code\":7,\"message\":\"This page is out of date. Reload to continue.\",\"details\":[]}}\n"
+	successBody := `{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100,"videoPostId":"post_1","videoUrl":"/videos/final.mp4"}}}}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/rest/media/post/create" {
+			t.Error("text-to-video unexpectedly used the retired media-post endpoint")
+			writer.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if request.URL.Path != "/rest/app-chat/conversations/new" {
+			http.NotFound(writer, request)
+			return
+		}
+		conversations++
+		if conversations == 1 {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(writer, staleBody)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, successBody)
+	}))
+	defer server.Close()
+
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptedToken, err := cipher.Encrypt("test-sso")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := infraegress.NewManager(egressRepositoryStub{}, cipher)
+	adapter := NewAdapter(Config{
+		BaseURL: server.URL, StatsigMode: "url", StatsigSignerURL: "https://signer.example/sign",
+		VideoTimeoutSeconds: 5,
+	}, manager, cipher, nil, nil)
+	adapter.statsig.validateEndpoint = func(context.Context, string) error { return nil }
+	adapter.statsig.fetchMeta = func(context.Context, string, string, *infraegress.Lease) (string, error) {
+		return "root-meta", nil
+	}
+	adapter.statsig.fetchMetaDocument = func(_ context.Context, _, _ string, _ *infraegress.Lease, document string) (string, error) {
+		if document != "/imagine" {
+			t.Fatalf("document=%q", document)
+		}
+		return "imagine-meta", nil
+	}
+	adapter.statsig.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		signerCalls++
+		var payload struct {
+			Environment struct {
+				MetaContent string `json:"metaContent"`
+			} `json:"environment"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Environment.MetaContent != "imagine-meta" {
+			t.Fatalf("meta=%q", payload.Environment.MetaContent)
+		}
+		raw := make([]byte, 70)
+		raw[0] = byte(signerCalls)
+		body, _ := json.Marshal(map[string]string{"x-statsig-id": base64.RawStdEncoding.EncodeToString(raw)})
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+	})}
+
+	result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: account.Credential{ID: 1, Provider: account.ProviderWeb, EncryptedAccessToken: encryptedToken},
+		Prompt:     "test",
+		Duration:   5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.URL != "https://assets.grok.com/videos/final.mp4" {
+		t.Fatalf("result=%#v", result)
+	}
+	if conversations != 2 || signerCalls != 2 {
+		t.Fatalf("conversations=%d signerCalls=%d, want 2/2", conversations, signerCalls)
+	}
+}
+
 func MarshalJSONBytes(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
