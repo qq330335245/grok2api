@@ -166,6 +166,26 @@ type EditableConfig struct {
 	Accounts          AccountsConfig
 	// AccountsProvided 区分旧管理端未发送 accounts 与显式提交默认值。
 	AccountsProvided bool
+	AntiDegrade      AntiDegradeConfig
+	// AntiDegradeProvided 区分反降智页提交与旧设置页未发送该段。
+	AntiDegradeProvided bool
+}
+
+// AntiDegradeConfig 是管理接口使用的反降智可编辑输入。
+type AntiDegradeConfig struct {
+	Enabled                bool
+	Mode                   string
+	ThinkingMinOutput      int
+	DensityWindow          string
+	DensityMaxAccounts     int
+	DirtyIPCooldown        string
+	FarmIPCooldown         string
+	MaxIPRetries           int
+	AccountIPFailThreshold int
+	AccountQuarantineTTL   string
+	ScorePrior             float64
+	ExploreRatio           float64
+	OperatorOverride       string
 }
 
 // Snapshot 表示当前运行设置和需要重启才能生效的字段。
@@ -268,6 +288,16 @@ func (s *Service) Update(ctx context.Context, expectedRevision uint64, input Edi
 		s.notify(ctx)
 	}
 	return result, nil
+}
+
+// UpdateAntiDegrade persists only the in-process ExitIP anti-degrade section.
+func (s *Service) UpdateAntiDegrade(ctx context.Context, expectedRevision uint64, input AntiDegradeConfig) (Snapshot, error) {
+	s.mu.RLock()
+	editable := toEditable(s.cfg)
+	s.mu.RUnlock()
+	editable.AntiDegrade = input
+	editable.AntiDegradeProvided = true
+	return s.Update(ctx, expectedRevision, editable)
 }
 
 // ReloadPersisted 在收到其他实例的变更通知后，从主数据库重载并应用运行设置。
@@ -432,6 +462,18 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 		base.Accounts.BuildForbiddenReauthCodes = append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...)
 	}
 	base.Accounts.ExcludeBuildBotFlaggedFromScheduling = value.Accounts.ExcludeBuildBotFlaggedFromScheduling
+	if value.AntiDegrade != nil {
+		base.QualityGuard.AntiDegrade = config.AntiDegradeConfig{
+			Enabled: value.AntiDegrade.Enabled, Mode: value.AntiDegrade.Mode,
+			ThinkingMinOutput: value.AntiDegrade.ThinkingMinOutput, DensityWindow: config.Duration(value.AntiDegrade.DensityWindow),
+			DensityMaxAccounts: value.AntiDegrade.DensityMaxAccounts, DirtyIPCooldown: config.Duration(value.AntiDegrade.DirtyIPCooldown),
+			FarmIPCooldown: config.Duration(value.AntiDegrade.FarmIPCooldown), MaxIPRetries: value.AntiDegrade.MaxIPRetries,
+			AccountIPFailThreshold: value.AntiDegrade.AccountIPFailThreshold, AccountQuarantineTTL: config.Duration(value.AntiDegrade.AccountQuarantineTTL),
+			ScorePrior: value.AntiDegrade.ScorePrior, ExploreRatio: value.AntiDegrade.ExploreRatio,
+			OperatorOverride: config.Duration(value.AntiDegrade.OperatorOverride),
+			StateFile:        base.QualityGuard.AntiDegrade.StateFile,
+		}
+	}
 	return base
 }
 
@@ -502,6 +544,18 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
 			AutoCleanIncludeDisabled:             value.Accounts.AutoCleanIncludeDisabled,
 		},
+		AntiDegrade: toDomainAntiDegrade(value.QualityGuard.AntiDegrade),
+	}
+}
+
+func toDomainAntiDegrade(value config.AntiDegradeConfig) *settingsdomain.AntiDegradeConfig {
+	return &settingsdomain.AntiDegradeConfig{
+		Enabled: value.Enabled, Mode: value.Mode, ThinkingMinOutput: value.ThinkingMinOutput,
+		DensityWindow: value.DensityWindow.Value(), DensityMaxAccounts: value.DensityMaxAccounts,
+		DirtyIPCooldown: value.DirtyIPCooldown.Value(), FarmIPCooldown: value.FarmIPCooldown.Value(),
+		MaxIPRetries: value.MaxIPRetries, AccountIPFailThreshold: value.AccountIPFailThreshold,
+		AccountQuarantineTTL: value.AccountQuarantineTTL.Value(), ScorePrior: value.ScorePrior,
+		ExploreRatio: value.ExploreRatio, OperatorOverride: value.OperatorOverride.Value(),
 	}
 }
 
@@ -647,6 +701,23 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 			durationInput{"accounts.autoCleanReauthMinAge", input.Accounts.AutoCleanReauthMinAge, func(value config.Duration) { next.Accounts.AutoCleanReauthMinAge = value }},
 		)
 	}
+	if input.AntiDegradeProvided {
+		next.QualityGuard.AntiDegrade.Enabled = input.AntiDegrade.Enabled
+		next.QualityGuard.AntiDegrade.Mode = strings.TrimSpace(input.AntiDegrade.Mode)
+		next.QualityGuard.AntiDegrade.ThinkingMinOutput = input.AntiDegrade.ThinkingMinOutput
+		next.QualityGuard.AntiDegrade.DensityMaxAccounts = input.AntiDegrade.DensityMaxAccounts
+		next.QualityGuard.AntiDegrade.MaxIPRetries = input.AntiDegrade.MaxIPRetries
+		next.QualityGuard.AntiDegrade.AccountIPFailThreshold = input.AntiDegrade.AccountIPFailThreshold
+		next.QualityGuard.AntiDegrade.ScorePrior = input.AntiDegrade.ScorePrior
+		next.QualityGuard.AntiDegrade.ExploreRatio = input.AntiDegrade.ExploreRatio
+		durations = append(durations,
+			durationInput{"antiDegrade.densityWindow", input.AntiDegrade.DensityWindow, func(value config.Duration) { next.QualityGuard.AntiDegrade.DensityWindow = value }},
+			durationInput{"antiDegrade.dirtyIpCooldown", input.AntiDegrade.DirtyIPCooldown, func(value config.Duration) { next.QualityGuard.AntiDegrade.DirtyIPCooldown = value }},
+			durationInput{"antiDegrade.farmIpCooldown", input.AntiDegrade.FarmIPCooldown, func(value config.Duration) { next.QualityGuard.AntiDegrade.FarmIPCooldown = value }},
+			durationInput{"antiDegrade.accountQuarantineTtl", input.AntiDegrade.AccountQuarantineTTL, func(value config.Duration) { next.QualityGuard.AntiDegrade.AccountQuarantineTTL = value }},
+			durationInput{"antiDegrade.operatorOverride", input.AntiDegrade.OperatorOverride, func(value config.Duration) { next.QualityGuard.AntiDegrade.OperatorOverride = value }},
+		)
+	}
 	for _, item := range durations {
 		value, err := time.ParseDuration(strings.TrimSpace(item.value))
 		if err != nil {
@@ -739,6 +810,18 @@ func toEditable(cfg config.Config) EditableConfig {
 			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
 		},
 		AccountsProvided: true,
+		AntiDegrade:      toEditableAntiDegrade(cfg.QualityGuard.AntiDegrade),
+	}
+}
+
+func toEditableAntiDegrade(cfg config.AntiDegradeConfig) AntiDegradeConfig {
+	return AntiDegradeConfig{
+		Enabled: cfg.Enabled, Mode: cfg.Mode, ThinkingMinOutput: cfg.ThinkingMinOutput,
+		DensityWindow: config.Duration(cfg.DensityWindow.Value()).String(), DensityMaxAccounts: cfg.DensityMaxAccounts,
+		DirtyIPCooldown: config.Duration(cfg.DirtyIPCooldown.Value()).String(), FarmIPCooldown: config.Duration(cfg.FarmIPCooldown.Value()).String(),
+		MaxIPRetries: cfg.MaxIPRetries, AccountIPFailThreshold: cfg.AccountIPFailThreshold,
+		AccountQuarantineTTL: config.Duration(cfg.AccountQuarantineTTL.Value()).String(), ScorePrior: cfg.ScorePrior,
+		ExploreRatio: cfg.ExploreRatio, OperatorOverride: config.Duration(cfg.OperatorOverride.Value()).String(),
 	}
 }
 

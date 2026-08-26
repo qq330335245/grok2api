@@ -10,6 +10,7 @@ import (
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
 	adminauthapp "github.com/chenyme/grok2api/backend/internal/application/adminauth"
+	"github.com/chenyme/grok2api/backend/internal/application/antidegrade"
 	auditapp "github.com/chenyme/grok2api/backend/internal/application/audit"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	dashboardapp "github.com/chenyme/grok2api/backend/internal/application/dashboard"
@@ -21,6 +22,7 @@ import (
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
 	accounthttp "github.com/chenyme/grok2api/backend/internal/transport/http/account"
 	adminauthhttp "github.com/chenyme/grok2api/backend/internal/transport/http/adminauth"
+	antidegradehttp "github.com/chenyme/grok2api/backend/internal/transport/http/antidegrade"
 	audithttp "github.com/chenyme/grok2api/backend/internal/transport/http/audit"
 	clientkeyhttp "github.com/chenyme/grok2api/backend/internal/transport/http/clientkey"
 	dashboardhttp "github.com/chenyme/grok2api/backend/internal/transport/http/dashboard"
@@ -60,6 +62,7 @@ type Dependencies struct {
 	Gateway                *gateway.Service
 	Media                  *mediaapp.Service
 	Settings               *settingsapp.Service
+	AntiDegrade            *antidegrade.Controller
 	Egress                 *egressapp.Service
 	QualityGuardStatePath  string
 	QualityGuardConfigPath string
@@ -157,6 +160,7 @@ func New(deps Dependencies) *gin.Engine {
 	dashboardhttp.NewHandler(deps.Dashboard).Register(adminProtected)
 	mediaHandler.RegisterAdmin(adminProtected)
 	settingshttp.NewHandler(deps.Settings).Register(adminProtected)
+	antidegradehttp.NewHandler(deps.AntiDegrade, deps.Accounts, deps.Settings).Register(adminProtected)
 	egressHandler := egresshttp.NewHandler(deps.Egress, deps.QualityGuardStatePath, deps.QualityGuardConfigPath).WithQualityGuardProbe(deps.QualityGuardProbe)
 	egressHandler.Register(adminProtected)
 	systemhttp.NewHandler(func() string {

@@ -176,6 +176,26 @@ func (l *ledger) densityCount(state *ipState, window time.Duration, now time.Tim
 	return len(seen)
 }
 
+func (l *ledger) windowAccounts(state *ipState, window time.Duration, now time.Time) []uint64 {
+	if state == nil {
+		return nil
+	}
+	cutoff := now.Add(-window)
+	seen := map[uint64]struct{}{}
+	ids := make([]uint64, 0)
+	for _, hit := range state.Window {
+		if hit.At.Before(cutoff) || hit.AccountID == 0 {
+			continue
+		}
+		if _, ok := seen[hit.AccountID]; ok {
+			continue
+		}
+		seen[hit.AccountID] = struct{}{}
+		ids = append(ids, hit.AccountID)
+	}
+	return ids
+}
+
 func (l *ledger) accountInWindow(state *ipState, accountID uint64, window time.Duration, now time.Time) bool {
 	cutoff := now.Add(-window)
 	for _, hit := range state.Window {

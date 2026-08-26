@@ -30,6 +30,8 @@ type Config struct {
 	Audit             AuditConfig
 	ClientKeyDefaults ClientKeyDefaultsConfig
 	Accounts          AccountsConfig
+	// AntiDegrade is optional so older persisted payloads keep config.yaml values.
+	AntiDegrade *AntiDegradeConfig
 }
 
 // ServerConfig 定义可热更新的推理入口容量参数。
@@ -150,4 +152,21 @@ type AccountsConfig struct {
 	AutoCleanReauthMinAge time.Duration
 	// AutoCleanIncludeDisabled 为 true 时，reauth 清理时包含 enabled=false 的账号。
 	AutoCleanIncludeDisabled bool
+}
+
+// AntiDegradeConfig is the persisted overlay for in-process ExitIP anti-degrade.
+type AntiDegradeConfig struct {
+	Enabled                bool
+	Mode                   string
+	ThinkingMinOutput      int
+	DensityWindow          time.Duration
+	DensityMaxAccounts     int
+	DirtyIPCooldown        time.Duration
+	FarmIPCooldown         time.Duration
+	MaxIPRetries           int
+	AccountIPFailThreshold int
+	AccountQuarantineTTL   time.Duration
+	ScorePrior             float64
+	ExploreRatio           float64
+	OperatorOverride       time.Duration
 }

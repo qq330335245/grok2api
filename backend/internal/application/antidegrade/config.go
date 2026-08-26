@@ -44,11 +44,14 @@ func (c Config) Normalize() Config {
 	if c.FarmIPCooldown <= 0 {
 		c.FarmIPCooldown = 6 * time.Hour
 	}
+	if c.AccountIPFailThreshold <= 0 {
+		c.AccountIPFailThreshold = 2
+	}
 	if c.MaxIPRetries <= 0 {
 		c.MaxIPRetries = 3
 	}
-	if c.AccountIPFailThreshold <= 0 {
-		c.AccountIPFailThreshold = 2
+	if c.MaxIPRetries < c.AccountIPFailThreshold {
+		c.MaxIPRetries = c.AccountIPFailThreshold
 	}
 	if c.AccountQuarantineTTL <= 0 {
 		c.AccountQuarantineTTL = 2 * time.Hour

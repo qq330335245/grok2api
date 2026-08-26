@@ -125,3 +125,33 @@ func TestMissingThinkingQuarantinesAndKeepsFirstIPCool(t *testing.T) {
 		t.Fatal("clear-cooldown must lift quarantine")
 	}
 }
+
+func TestSnapshotShowsWindowLoadAndClearIP(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	nodes := staticNodes{
+		{ID: 1, Enabled: true, ExitIP: "10.0.0.1", Name: "node-a"},
+		{ID: 2, Enabled: true, ExitIP: "10.0.0.2", Name: "node-b"},
+	}
+	controller := New(Config{
+		Enabled: true, Mode: ModeEnforce, DensityWindow: 15 * time.Minute, DensityMaxAccounts: 5,
+		DirtyIPCooldown: 30 * time.Minute, AccountIPFailThreshold: 2, StateFile: t.TempDir() + "/l.json",
+	}, nodes, nil, nil)
+	controller.ledger.now = func() time.Time { return now }
+	first := accountdomain.Credential{ID: 7}
+	second := accountdomain.Credential{ID: 8}
+	controller.OnMissingThinking(context.Background(), first, 1, "10.0.0.1")
+	controller.OnSuccess(8, 1, "10.0.0.1")
+	_ = second
+	snapshot := controller.Snapshot(context.Background())
+	if len(snapshot.IPs) != 1 {
+		t.Fatalf("ips=%d", len(snapshot.IPs))
+	}
+	if snapshot.IPs[0].AccountCount != 2 || snapshot.IPs[0].AccountLimit != 5 || !snapshot.IPs[0].Cooling {
+		t.Fatalf("ip=%#v", snapshot.IPs[0])
+	}
+	controller.ClearIP(context.Background(), "10.0.0.1")
+	snapshot = controller.Snapshot(context.Background())
+	if snapshot.IPs[0].Cooling {
+		t.Fatal("cleared IP should not be cooling")
+	}
+}
