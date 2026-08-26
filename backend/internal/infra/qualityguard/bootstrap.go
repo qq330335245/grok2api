@@ -50,6 +50,7 @@ type bootstrapConfig struct {
 	RotationToken           string   `json:"rotation_token"`
 	RotationTimeoutSeconds  int      `json:"rotation_timeout_seconds"`
 	RotatableNodeIDs        []string `json:"rotatable_node_ids"`
+	DisableActiveProbes     bool     `json:"disable_active_probes"`
 }
 
 // Prepare writes the sidecar bootstrap file and returns the scoped internal
@@ -79,7 +80,8 @@ func Prepare(path string, value config.QualityGuardConfig, jwtSecret string) (st
 			MinHealthyNodes: value.MinimumHealthyNodes, MaxOutputTokens: value.MaxOutputTokens, FailClosed: value.FailClosed,
 			MinGenerationMS: int(value.MinimumGenerationWindow.Value().Milliseconds()), RotationURL: strings.TrimSpace(value.RotationURL),
 			RotationToken: value.RotationToken, RotationTimeoutSeconds: int(value.RotationTimeout.Value().Seconds()),
-			RotatableNodeIDs: uint64Strings(value.RotatableNodeIDs),
+			RotatableNodeIDs:    uint64Strings(value.RotatableNodeIDs),
+			DisableActiveProbes: value.AntiDegrade.Enabled,
 		},
 	}
 	if err := writeAtomic(path, payload); err != nil {

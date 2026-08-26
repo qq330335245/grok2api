@@ -133,6 +133,13 @@ type Service struct {
 	assignmentRunning           bool
 	autoAssignMaxNodeShare      float64
 	autoAssignMaxMigrationShare float64
+	cooldownClearer             NodeCooldownClearer
+}
+
+// NodeCooldownClearer is notified when an operator re-enables a node so
+// automatic ExitIP cooldowns can be overridden.
+type NodeCooldownClearer interface {
+	ClearForNode(ctx context.Context, nodeID uint64)
 }
 
 // QualityLeaseRepository is optional and deliberately separate from account
@@ -158,6 +165,21 @@ func (s *Service) SetQualityProber(value QualityProber) {
 	s.mu.Lock()
 	s.qualityProber = value
 	s.mu.Unlock()
+}
+
+func (s *Service) SetNodeCooldownClearer(value NodeCooldownClearer) {
+	s.mu.Lock()
+	s.cooldownClearer = value
+	s.mu.Unlock()
+}
+
+func (s *Service) notifyNodeOpened(ctx context.Context, nodeID uint64) {
+	s.mu.RLock()
+	clearer := s.cooldownClearer
+	s.mu.RUnlock()
+	if clearer != nil && nodeID != 0 {
+		clearer.ClearForNode(ctx, nodeID)
+	}
 }
 
 func (s *Service) ProbeQuality(ctx context.Context, nodeID uint64, input QualityProbeInput) (QualityProbeResult, error) {
@@ -502,6 +524,7 @@ func (s *Service) Update(ctx context.Context, id uint64, input Input) (domain.Pu
 	}
 	previousScope := value.Scope
 	previousProxyURL := value.EncryptedProxyURL
+	wasEnabled := value.Enabled
 	value, err = s.applyInput(value, input, false)
 	if err != nil {
 		return domain.PublicNode{}, err
@@ -524,6 +547,9 @@ func (s *Service) Update(ctx context.Context, id uint64, input Input) (domain.Pu
 			if clearErr := s.clearQualityLeasesForNodes(ctx, []uint64{updated.ID}); clearErr != nil {
 				return s.publicNode(updated), clearErr
 			}
+		}
+		if updated.Enabled && !wasEnabled {
+			s.notifyNodeOpened(ctx, updated.ID)
 		}
 	}
 	return s.publicNode(updated), err
@@ -841,6 +867,10 @@ func (s *Service) UpdateManyEnabled(ctx context.Context, nodeIDs []uint64, enabl
 				if clearErr := s.clearQualityLeasesForNodes(ctx, ids); clearErr != nil {
 					return updated, clearErr
 				}
+			} else {
+				for _, id := range ids {
+					s.notifyNodeOpened(ctx, id)
+				}
 			}
 		}
 		return updated, nil
@@ -868,6 +898,11 @@ func (s *Service) UpdateManyEnabled(ctx context.Context, nodeIDs []uint64, enabl
 	if !enabled && updated > 0 {
 		if err := s.clearQualityLeasesForNodes(ctx, ids); err != nil {
 			return updated, err
+		}
+	}
+	if enabled && updated > 0 {
+		for _, id := range ids {
+			s.notifyNodeOpened(ctx, id)
 		}
 	}
 	return updated, nil

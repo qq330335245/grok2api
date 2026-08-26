@@ -83,21 +83,21 @@ class ClassificationTests(unittest.TestCase):
             "firstTokenMs": 10000, "durationMs": 10100,
             "outputTokens": 2000, "reasoningTokens": 0,
         }, cfg)
-        self.assertEqual((classification, reason, output), ("hard", "buffered_burst", 2000))
+        self.assertEqual((classification, reason, output), ("hard", "missing_thinking", 2000))
         self.assertEqual(speed, 20000)
 
-    def test_passive_audit_does_not_infer_thinking_requirement(self):
+    def test_passive_audit_treats_zero_reasoning_as_missing_thinking(self):
         cfg = config(fail_closed=True, min_generation_ms=1000)
         base = {
             "provider": "grok_build", "streaming": True, "statusCode": 200,
             "firstTokenMs": 2000, "durationMs": 4000, "outputTokens": 200,
         }
-        self.assertEqual(quality_guard.classify_audit({**base, "reasoningTokens": 0}, cfg)[:2], ("healthy", "within_threshold"))
+        self.assertEqual(quality_guard.classify_audit({**base, "reasoningTokens": 0}, cfg)[:2], ("hard", "missing_thinking"))
         classification, reason, speed, _ = quality_guard.classify_audit({**base, "reasoningTokens": 80}, cfg)
         self.assertEqual((classification, reason), ("healthy", "within_threshold"))
         self.assertAlmostEqual(speed, 100.0)
         short = {**base, "outputTokens": 50, "reasoningTokens": 0, "durationMs": 2500}
-        self.assertEqual(quality_guard.classify_audit(short, cfg)[:2], ("healthy", "within_threshold"))
+        self.assertEqual(quality_guard.classify_audit(short, cfg)[:2], ("hard", "missing_thinking"))
         tiny = {**base, "outputTokens": 20, "reasoningTokens": 0, "durationMs": 2200}
         self.assertEqual(quality_guard.classify_audit(tiny, cfg)[0], "ignored")
 

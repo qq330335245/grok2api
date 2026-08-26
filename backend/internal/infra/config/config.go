@@ -285,6 +285,27 @@ type QualityGuardConfig struct {
 	// RequestRetry withholds a thinking-model stream that already has enough
 	// visible output and no reasoning, then retries on another account.
 	RequestRetry QualityGuardRequestRetryConfig `yaml:"requestRetry"`
+	// AntiDegrade is the in-process ExitIP density / thinking=0 / botflag=2 policy.
+	// It is independent of qualityGuard.enabled (sidecar).
+	AntiDegrade AntiDegradeConfig `yaml:"antiDegrade"`
+}
+
+// AntiDegradeConfig holds ExitIP anti-degrade settings. Zero Enabled leaves
+// production behavior unchanged.
+type AntiDegradeConfig struct {
+	Enabled                bool     `yaml:"enabled"`
+	Mode                   string   `yaml:"mode"`
+	ThinkingMinOutput      int      `yaml:"thinkingMinOutput"`
+	DensityWindow          Duration `yaml:"densityWindow"`
+	DensityMaxAccounts     int      `yaml:"densityMaxAccounts"`
+	DirtyIPCooldown        Duration `yaml:"dirtyIpCooldown"`
+	FarmIPCooldown         Duration `yaml:"farmIpCooldown"`
+	MaxIPRetries           int      `yaml:"maxIpRetries"`
+	AccountIPFailThreshold int      `yaml:"accountIpFailThreshold"`
+	ScorePrior             float64  `yaml:"scorePrior"`
+	ExploreRatio           float64  `yaml:"exploreRatio"`
+	OperatorOverride       Duration `yaml:"operatorOverride"`
+	StateFile              string   `yaml:"stateFile"`
 }
 
 // QualityGuardRequestRetryConfig holds the in-process missing-thinking withhold policy.
@@ -734,6 +755,9 @@ func validateQualityGuardConfig(value QualityGuardConfig) error {
 	if err := validateQualityGuardRequestRetry(value.RequestRetry); err != nil {
 		return err
 	}
+	if err := validateAntiDegrade(value.AntiDegrade); err != nil {
+		return err
+	}
 	if !value.Enabled {
 		return nil
 	}
@@ -808,6 +832,45 @@ func validateQualityGuardRequestRetry(value QualityGuardRequestRetryConfig) erro
 	}
 	if d := value.IdleAccountCooldown.Value(); d != 0 && (d < time.Minute || d > 168*time.Hour) {
 		return errors.New("qualityGuard.requestRetry.idleAccountCooldown 必须在 1m 到 168h 之间")
+	}
+	return nil
+}
+
+func validateAntiDegrade(value AntiDegradeConfig) error {
+	if !value.Enabled {
+		return nil
+	}
+	switch strings.TrimSpace(value.Mode) {
+	case "", "observe", "enforce":
+	default:
+		return errors.New("qualityGuard.antiDegrade.mode 必须是 observe 或 enforce")
+	}
+	if value.ThinkingMinOutput != 0 && (value.ThinkingMinOutput < 8 || value.ThinkingMinOutput > 256) {
+		return errors.New("qualityGuard.antiDegrade.thinkingMinOutput 必须在 8 到 256 之间")
+	}
+	if d := value.DensityWindow.Value(); d != 0 && (d < time.Minute || d > 24*time.Hour) {
+		return errors.New("qualityGuard.antiDegrade.densityWindow 必须在 1m 到 24h 之间")
+	}
+	if value.DensityMaxAccounts != 0 && (value.DensityMaxAccounts < 1 || value.DensityMaxAccounts > 50) {
+		return errors.New("qualityGuard.antiDegrade.densityMaxAccounts 必须在 1 到 50 之间")
+	}
+	if d := value.DirtyIPCooldown.Value(); d != 0 && (d < time.Minute || d > 24*time.Hour) {
+		return errors.New("qualityGuard.antiDegrade.dirtyIpCooldown 必须在 1m 到 24h 之间")
+	}
+	if d := value.FarmIPCooldown.Value(); d != 0 && (d < time.Minute || d > 168*time.Hour) {
+		return errors.New("qualityGuard.antiDegrade.farmIpCooldown 必须在 1m 到 168h 之间")
+	}
+	if value.MaxIPRetries != 0 && (value.MaxIPRetries < 1 || value.MaxIPRetries > 6) {
+		return errors.New("qualityGuard.antiDegrade.maxIpRetries 必须在 1 到 6 之间")
+	}
+	if value.AccountIPFailThreshold != 0 && (value.AccountIPFailThreshold < 1 || value.AccountIPFailThreshold > 10) {
+		return errors.New("qualityGuard.antiDegrade.accountIpFailThreshold 必须在 1 到 10 之间")
+	}
+	if value.ScorePrior != 0 && (value.ScorePrior < 0.05 || value.ScorePrior > 1) {
+		return errors.New("qualityGuard.antiDegrade.scorePrior 必须在 0.05 到 1 之间")
+	}
+	if value.ExploreRatio < 0 || value.ExploreRatio > 0.5 {
+		return errors.New("qualityGuard.antiDegrade.exploreRatio 必须在 0 到 0.5 之间")
 	}
 	return nil
 }

@@ -171,3 +171,20 @@ qualityGuard:
     # Single-account pools should set this lower; toggling enabled does not
     # clear cooldown — use POST /api/admin/v1/accounts/:id/clear-cooldown.
     idleAccountCooldown: 15m
+  # In-process ExitIP anti-degrade (independent of sidecar qualityGuard.enabled).
+  # thinking=0 withholds and retries the same account on another IP. Do not enable
+  # requestRetry at the same time — that path cools/disables credentials.
+  antiDegrade:
+    enabled: false
+    mode: enforce # observe | enforce
+    thinkingMinOutput: 32
+    densityWindow: 15m
+    densityMaxAccounts: 5
+    dirtyIpCooldown: 30m
+    farmIpCooldown: 6h
+    maxIpRetries: 3
+    accountIpFailThreshold: 2
+    scorePrior: 0.7
+    exploreRatio: 0.05
+    operatorOverride: 10m
+    stateFile: "./data/antidegrade-exitip.json"

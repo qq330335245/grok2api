@@ -91,6 +91,7 @@ class Config:
     lock_file: Path
     runtime_config_file: Path
     profiles_file: Path = dataclasses.field(default_factory=lambda: Path("/var/lib/grok2api-quality-guard/profiles.json"))
+    disable_active_probes: bool = False
 
     @classmethod
     def from_bootstrap(cls, path: Path = BOOTSTRAP_FILE) -> "Config":
@@ -144,6 +145,7 @@ class Config:
             lock_file=Path("/var/lib/grok2api-quality-guard/guard.lock"),
             runtime_config_file=Path("/var/lib/grok2api-quality-guard/runtime-config.json"),
             profiles_file=Path("/var/lib/grok2api-quality-guard/profiles.json"),
+            disable_active_probes=bool(values.get("disable_active_probes")),
         )
         config.validate()
         return config
@@ -536,6 +538,10 @@ def classify_audit(value: dict[str, Any], config: Config) -> tuple[str, str, flo
     if generation_ms <= 0 or output_tokens < 32:
         return "ignored", "insufficient_output_tokens", 0.0, output_tokens
     speed = float(output_tokens) * 1000 / float(generation_ms)
+    if getattr(config, "disable_active_probes", False):
+        return "ignored", "antidegrade_owns_thinking", speed, output_tokens
+    if reasoning_tokens <= 0:
+        return "hard", "missing_thinking", speed, output_tokens
     if config.fail_closed and generation_ms < config.min_generation_ms and speed >= config.soft_tps:
         return "hard", "buffered_burst", speed, output_tokens
     if speed >= config.hard_tps:
@@ -1110,6 +1116,8 @@ class Guard:
         )
 
     def _probe_active(self, nodes: list[dict[str, Any]], node: dict[str, Any], now: float, trigger: str = "scheduled") -> None:
+        if getattr(self.config, "disable_active_probes", False):
+            return
         node_id = str(node["id"])
         state = self._state_for(node_id)
         if state.get("last_reason") == "probe_no_account" and now < float(state.get("quarantined_until", 0.0)):
