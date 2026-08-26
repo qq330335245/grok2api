@@ -10,14 +10,15 @@ import (
 )
 
 const (
-	reasonDirtyIP  = "dirty_ip"
-	reasonFarm     = "farm"
-	reasonDensity  = "density"
-	priorWeight    = 5.0
-	maxWindowHits  = 256
-	maxEvents      = 80
-	maxFailedIPs   = 16
-	accountFailTTL = time.Hour
+	reasonDirtyIP    = "dirty_ip"
+	reasonFarm       = "farm"
+	reasonDensity    = "density"
+	reasonQuarantine = "k_ip_no_streamed_thinking"
+	priorWeight      = 5.0
+	maxWindowHits    = 256
+	maxEvents        = 80
+	maxFailedIPs     = 16
+	accountFailTTL   = time.Hour
 )
 
 type accountHit struct {
@@ -42,7 +43,9 @@ type ipState struct {
 }
 
 type accountFail struct {
-	IPs []ipFail `json:"ips,omitempty"`
+	IPs              []ipFail  `json:"ips,omitempty"`
+	QuarantineUntil  time.Time `json:"quarantineUntil,omitempty"`
+	QuarantineReason string    `json:"quarantineReason,omitempty"`
 }
 
 type ipFail struct {
@@ -215,6 +218,66 @@ func (l *ledger) cool(key, reason string, until time.Time) {
 		state.CooldownReason = reason
 		l.dirty = true
 	}
+}
+
+func (l *ledger) liftCooldown(key string) {
+	if key == "" {
+		return
+	}
+	state, ok := l.state.IPs[key]
+	if !ok || state == nil {
+		return
+	}
+	state.CooldownUntil = time.Time{}
+	state.CooldownReason = ""
+	l.dirty = true
+}
+
+func (l *ledger) accountQuarantined(accountID uint64, now time.Time) bool {
+	if accountID == 0 {
+		return false
+	}
+	current, ok := l.state.Accounts[accountID]
+	if !ok {
+		return false
+	}
+	return !current.QuarantineUntil.IsZero() && now.Before(current.QuarantineUntil)
+}
+
+func (l *ledger) quarantineAccount(accountID uint64, until time.Time, reason string) []string {
+	if accountID == 0 {
+		return nil
+	}
+	current := l.state.Accounts[accountID]
+	current.QuarantineUntil = until
+	current.QuarantineReason = reason
+	lifted := make([]string, 0)
+	// Keep the first failed ExitIP cooled (may still be a dirty IP). Lift the
+	// later IPs that were only used to prove the failure follows the account.
+	for i, item := range current.IPs {
+		if i == 0 || item.ExitIP == "" {
+			continue
+		}
+		l.liftCooldown(item.ExitIP)
+		lifted = append(lifted, item.ExitIP)
+	}
+	l.state.Accounts[accountID] = current
+	l.dirty = true
+	return lifted
+}
+
+func (l *ledger) clearAccountQuarantine(accountID uint64) {
+	if accountID == 0 {
+		return
+	}
+	current, ok := l.state.Accounts[accountID]
+	if !ok {
+		return
+	}
+	current.QuarantineUntil = time.Time{}
+	current.QuarantineReason = ""
+	l.state.Accounts[accountID] = current
+	l.dirty = true
 }
 
 func (l *ledger) clearCooldown(key string, override time.Duration, now time.Time) {

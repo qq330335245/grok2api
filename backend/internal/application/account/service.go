@@ -200,6 +200,8 @@ type UpdateInput struct {
 	MinimumRemaining       *float64
 	CloudflareCookies      *string
 	ClearCloudflareCookies bool
+	SSOToken               *string
+	ClearSSOToken          bool
 	// BuildSuperEntitled 仅 grok_build 可设置；非 Build 返回业务错误。
 	BuildSuperEntitled *bool
 	// BuildRouteMode 仅 grok_build 可设置；nil 表示不修改。
@@ -260,16 +262,19 @@ const (
 	BuildDetectOutcomeInvalid BuildDetectOutcome = "invalid"
 	// BuildDetectOutcomeFailed 表示探测失败但未判定为永久失效（网络/5xx/临时额度等）。
 	BuildDetectOutcomeFailed BuildDetectOutcome = "failed"
+	// BuildDetectOutcomeFlagged 表示 grok.com 页面 botFlagSource 为 1 或 2。
+	BuildDetectOutcomeFlagged BuildDetectOutcome = "flagged"
 )
 
 // BuildDetectItemResult 是单账号探测的结构化结果，供 SSE 增量推送。
 type BuildDetectItemResult struct {
-	AccountID  uint64
-	Name       string
-	Email      string
-	Outcome    BuildDetectOutcome
-	Reason     string
-	HTTPStatus int
+	AccountID     uint64
+	Name          string
+	Email         string
+	Outcome       BuildDetectOutcome
+	Reason        string
+	HTTPStatus    int
+	BotFlagSource int
 }
 
 // BuildDetectItemObserver 在单个账号探测完成后推送明细；返回错误会取消批次。
@@ -436,6 +441,20 @@ type Service struct {
 	buildBotFlagCache      *resultcache.Cache[string, []uint64]
 	logger                 *slog.Logger
 	now                    func() time.Time
+	quarantineClearer      QuarantineClearer
+}
+
+// QuarantineClearer lifts in-process anti-degrade account isolation when an
+// operator clears cooldown from the admin API.
+type QuarantineClearer interface {
+	ClearAccount(ctx context.Context, accountID uint64)
+}
+
+func (s *Service) SetQuarantineClearer(value QuarantineClearer) {
+	if s == nil {
+		return
+	}
+	s.quarantineClearer = value
 }
 
 func (s *Service) SetQuotaRecoveryQueue(queue repository.QuotaRecoveryQueue) {
@@ -693,6 +712,9 @@ func (s *Service) RebuildBuildBotFlagIndex(ctx context.Context) error {
 		}
 		updates := make([]repository.BuildBotFlagSourceUpdate, 0)
 		for _, value := range values {
+			if value.StoredOrigin == accountdomain.BuildBotFlagOriginPage {
+				continue
+			}
 			credential := accountdomain.Credential{
 				ID: value.AccountID, Provider: accountdomain.ProviderBuild, EncryptedAccessToken: value.EncryptedAccessToken,
 			}
@@ -1074,6 +1096,13 @@ func (s *Service) credentialMetadata(value accountdomain.Credential) provider.Cr
 }
 
 func (s *Service) buildBotFlagMetadata(value accountdomain.Credential) provider.CredentialMetadata {
+	if value.BuildBotFlagOrigin == accountdomain.BuildBotFlagOriginPage {
+		source := value.BuildBotFlagSource
+		if source != 1 && source != 2 {
+			source = 0
+		}
+		return provider.CredentialMetadata{BuildBotFlagInspected: true, BuildBotFlagged: source != 0, BuildBotFlagSource: source}
+	}
 	metadata := s.credentialMetadata(value)
 	if metadata.BuildBotFlagInspected {
 		return metadata
@@ -2190,10 +2219,17 @@ func (s *Service) marshalProviderCredentials(providerValue accountdomain.Provide
 		if accessToken == "" && refreshToken == "" {
 			return ExportResult{}, fmt.Errorf("账号 %d 没有可导出的凭据", value.ID)
 		}
+		ssoToken := ""
+		if value.EncryptedSSOToken != "" {
+			ssoToken, err = s.cipher.Decrypt(value.EncryptedSSOToken)
+			if err != nil {
+				return ExportResult{}, fmt.Errorf("解密账号 %d SSO: %w", value.ID, err)
+			}
+		}
 		seeds = append(seeds, provider.CredentialSeed{
 			Provider: value.Provider, AuthType: value.AuthType, WebTier: value.WebTier,
 			Name: value.Name, Email: value.Email, UserID: value.UserID, TeamID: value.TeamID,
-			OIDCClientID: value.OIDCClientID, AccessToken: accessToken, RefreshToken: refreshToken,
+			OIDCClientID: value.OIDCClientID, AccessToken: accessToken, RefreshToken: refreshToken, SSOToken: ssoToken,
 			CloudflareCookies: cloudflareCookies, ExpiresAt: value.ExpiresAt,
 			WebNSFWEnabledAt: value.WebNSFWEnabledAt, WebTermsAcceptedAt: value.WebTermsAcceptedAt,
 			WebTermsAcceptedVersion: value.WebTermsAcceptedVersion, WebBirthDateSetAt: value.WebBirthDateSetAt,
@@ -2257,6 +2293,30 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateInput) (Vie
 			value.EncryptedCloudflareCookie = encrypted
 		}
 	}
+	if input.ClearSSOToken {
+		if value.Provider != accountdomain.ProviderBuild {
+			return View{}, invalidInput("仅 Grok Build 账号支持 SSO")
+		}
+		value.EncryptedSSOToken = ""
+	} else if input.SSOToken != nil {
+		if value.Provider != accountdomain.ProviderBuild {
+			return View{}, invalidInput("仅 Grok Build 账号支持 SSO")
+		}
+		token := strings.TrimSpace(*input.SSOToken)
+		if strings.HasPrefix(strings.ToLower(token), "sso=") {
+			token = strings.TrimSpace(token[len("sso="):])
+		}
+		if len(token) > 16<<10 {
+			return View{}, invalidInput("SSO 不能超过 16 KiB")
+		}
+		if token != "" {
+			encrypted, encryptErr := s.cipher.Encrypt(token)
+			if encryptErr != nil {
+				return View{}, encryptErr
+			}
+			value.EncryptedSSOToken = encrypted
+		}
+	}
 	if input.BuildSuperEntitled != nil {
 		if value.Provider != accountdomain.ProviderBuild {
 			return View{}, invalidInput("仅 Grok Build 账号支持设置 Build Super entitlement")
@@ -2303,6 +2363,9 @@ func (s *Service) ClearCooldown(ctx context.Context, id uint64) (View, error) {
 	healthMarker := accountdomain.NormalizeHealthMarker(value.LastError)
 	if err := s.accounts.UpdateHealth(ctx, value.ID, value.Provider, 0, nil, healthMarker, false); err != nil {
 		return View{}, mapRepositoryError(err)
+	}
+	if s.quarantineClearer != nil {
+		s.quarantineClearer.ClearAccount(ctx, id)
 	}
 	return s.Get(ctx, id)
 }
@@ -4496,8 +4559,18 @@ func (s *Service) credentialFromSeed(seed provider.CredentialSeed) (accountdomai
 		}
 		authType = definition.Credential.AuthType
 	}
-	value := accountdomain.Credential{Provider: providerValue, AuthType: authType, WebTier: seed.WebTier, Name: seed.Name, Email: seed.Email, UserID: seed.UserID, TeamID: seed.TeamID, SourceKey: sourceKey, OIDCClientID: seed.OIDCClientID, EncryptedAccessToken: accessEncrypted, EncryptedRefreshToken: refreshEncrypted, EncryptedCloudflareCookie: cloudflareEncrypted, ExpiresAt: seed.ExpiresAt, Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: accountdomain.DefaultPriority, MaxConcurrent: accountdomain.DefaultMaxConcurrent, MinimumRemaining: accountdomain.DefaultMinimumRemaining, WebNSFWEnabledAt: seed.WebNSFWEnabledAt, WebTermsAcceptedAt: seed.WebTermsAcceptedAt, WebTermsAcceptedVersion: seed.WebTermsAcceptedVersion, WebBirthDateSetAt: seed.WebBirthDateSetAt}
+	ssoEncrypted := ""
+	if strings.TrimSpace(seed.SSOToken) != "" {
+		ssoEncrypted, err = s.cipher.Encrypt(strings.TrimSpace(seed.SSOToken))
+		if err != nil {
+			return accountdomain.Credential{}, err
+		}
+	}
+	value := accountdomain.Credential{Provider: providerValue, AuthType: authType, WebTier: seed.WebTier, Name: seed.Name, Email: seed.Email, UserID: seed.UserID, TeamID: seed.TeamID, SourceKey: sourceKey, OIDCClientID: seed.OIDCClientID, EncryptedAccessToken: accessEncrypted, EncryptedRefreshToken: refreshEncrypted, EncryptedCloudflareCookie: cloudflareEncrypted, EncryptedSSOToken: ssoEncrypted, ExpiresAt: seed.ExpiresAt, Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: accountdomain.DefaultPriority, MaxConcurrent: accountdomain.DefaultMaxConcurrent, MinimumRemaining: accountdomain.DefaultMinimumRemaining, WebNSFWEnabledAt: seed.WebNSFWEnabledAt, WebTermsAcceptedAt: seed.WebTermsAcceptedAt, WebTermsAcceptedVersion: seed.WebTermsAcceptedVersion, WebBirthDateSetAt: seed.WebBirthDateSetAt}
 	value.BuildBotFlagSource = s.credentialMetadata(value).BuildBotFlagSource
+	if value.BuildBotFlagSource == 1 || value.BuildBotFlagSource == 2 {
+		value.BuildBotFlagOrigin = accountdomain.BuildBotFlagOriginJWT
+	}
 	if providerValue == accountdomain.ProviderWeb && strings.TrimSpace(seed.AccessToken) != "" {
 		value.EgressIdentity = "sso_" + security.HashToken(seed.AccessToken)[:32]
 	}

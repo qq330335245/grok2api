@@ -302,6 +302,7 @@ type AntiDegradeConfig struct {
 	FarmIPCooldown         Duration `yaml:"farmIpCooldown"`
 	MaxIPRetries           int      `yaml:"maxIpRetries"`
 	AccountIPFailThreshold int      `yaml:"accountIpFailThreshold"`
+	AccountQuarantineTTL   Duration `yaml:"accountQuarantineTtl"`
 	ScorePrior             float64  `yaml:"scorePrior"`
 	ExploreRatio           float64  `yaml:"exploreRatio"`
 	OperatorOverride       Duration `yaml:"operatorOverride"`
@@ -865,6 +866,9 @@ func validateAntiDegrade(value AntiDegradeConfig) error {
 	}
 	if value.AccountIPFailThreshold != 0 && (value.AccountIPFailThreshold < 1 || value.AccountIPFailThreshold > 10) {
 		return errors.New("qualityGuard.antiDegrade.accountIpFailThreshold 必须在 1 到 10 之间")
+	}
+	if d := value.AccountQuarantineTTL.Value(); d != 0 && (d < time.Minute || d > 168*time.Hour) {
+		return errors.New("qualityGuard.antiDegrade.accountQuarantineTtl 必须在 1m 到 168h 之间")
 	}
 	if value.ScorePrior != 0 && (value.ScorePrior < 0.05 || value.ScorePrior > 1) {
 		return errors.New("qualityGuard.antiDegrade.scorePrior 必须在 0.05 到 1 之间")

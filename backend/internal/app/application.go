@@ -356,6 +356,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	antiDegradeController := newAntiDegradeController(cfg.QualityGuard.AntiDegrade, egressService, accountService, logger)
 	gatewayService.SetAntiDegrade(antiDegradeController)
 	egressService.SetNodeCooldownClearer(antiDegradeController)
+	accountService.SetQuarantineClearer(antiDegradeController)
 	gatewayService.UpdateVideoMaxAttempts(cfg.Routing.VideoMaxAttempts)
 	gatewayService.UpdateMarkBuildChatDeniedAsReauth(cfg.Routing.MarkBuildChatDeniedAsReauth)
 	gatewayService.SetLogger(logger)

@@ -159,6 +159,7 @@ function RequestOverviewPanel({ audit }: { audit: AuditDTO }) {
     if (audit.reasoningTokens > 0) {
       parts.push(`(${t("audits.reasoning")} ${formatNumber(audit.reasoningTokens, i18n.language)})`);
     }
+    parts.push(`· ${audit.streamedThinking ? t("audits.streamedThinkingYes") : t("audits.streamedThinkingNo")}`);
     parts.push(`· ${t("audits.total")} ${formatNumber(audit.totalTokens, i18n.language)}`);
     return parts.join(" ");
   }, [audit, t, i18n.language]);

@@ -18,6 +18,7 @@ type Config struct {
 	FarmIPCooldown         time.Duration
 	MaxIPRetries           int
 	AccountIPFailThreshold int
+	AccountQuarantineTTL   time.Duration
 	ScorePrior             float64
 	ExploreRatio           float64
 	OperatorOverride       time.Duration
@@ -48,6 +49,9 @@ func (c Config) Normalize() Config {
 	}
 	if c.AccountIPFailThreshold <= 0 {
 		c.AccountIPFailThreshold = 2
+	}
+	if c.AccountQuarantineTTL <= 0 {
+		c.AccountQuarantineTTL = 2 * time.Hour
 	}
 	if c.ScorePrior <= 0 || c.ScorePrior > 1 {
 		c.ScorePrior = 0.7

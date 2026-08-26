@@ -172,8 +172,11 @@ qualityGuard:
     # clear cooldown — use POST /api/admin/v1/accounts/:id/clear-cooldown.
     idleAccountCooldown: 15m
   # In-process ExitIP anti-degrade (independent of sidecar qualityGuard.enabled).
-  # thinking=0 withholds and retries the same account on another IP. Do not enable
-  # requestRetry at the same time — that path cools/disables credentials.
+  # thinking=0 withholds and retries the same account on another IP. After K
+  # distinct ExitIPs still have no streamed thinking, the account is quarantined
+  # (soft, TTL) and the request failovers to another account. The first failed
+  # IP stays cooled; later IPs are lifted. Do not enable requestRetry at the
+  # same time — that path cools/disables credentials.
   antiDegrade:
     enabled: false
     mode: enforce # observe | enforce
@@ -184,6 +187,7 @@ qualityGuard:
     farmIpCooldown: 6h
     maxIpRetries: 3
     accountIpFailThreshold: 2
+    accountQuarantineTtl: 2h
     scorePrior: 0.7
     exploreRatio: 0.05
     operatorOverride: 10m

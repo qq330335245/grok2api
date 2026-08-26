@@ -154,6 +154,15 @@ func (s *qualityScanState) signals() QualityStreamSignals {
 	}
 }
 
+func (s *qualityScanState) peekUsage() Usage {
+	if s == nil {
+		return Usage{}
+	}
+	usage := s.usage
+	usage.StreamedThinking = s.hasThinking
+	return usage
+}
+
 // ObserveQualityChunk feeds one SSE chunk into the hold classifier state.
 // This is the shipped scanner used by peekQualityStream.
 func ObserveQualityChunk(state *qualityScanState, chunk []byte) {
@@ -180,10 +189,9 @@ func ObserveQualityChunk(state *qualityScanState, chunk []byte) {
 			continue
 		}
 		if bytes.Equal(line, []byte(qualityReasoningEvidenceSSEComment)) {
-			// Protocol converters cannot expose encrypted_content in every public
-			// JSON contract. This internal SSE comment preserves that evidence.
+			// Encrypted-only thinking is not shown to Cherry/Pi. Count it as a
+			// stub so we wait, not as streamed thinking that would deliver.
 			state.reasoningStarted = true
-			state.hasThinking = true
 			continue
 		}
 		if !bytes.HasPrefix(line, []byte("data:")) {
@@ -281,11 +289,10 @@ func noteResponsesReasoningItem(state *qualityScanState, item qualityResponsesOu
 	if !strings.EqualFold(strings.TrimSpace(item.Type), "reasoning") {
 		return
 	}
-	if strings.TrimSpace(item.ID) != "" {
+	// An id-only or encrypted-only reasoning item is the degrade stub.
+	// HasThinking requires a non-empty text/summary delta elsewhere.
+	if strings.TrimSpace(item.ID) != "" || strings.TrimSpace(item.EncryptedContent) != "" {
 		state.reasoningStarted = true
-	}
-	if strings.TrimSpace(item.EncryptedContent) != "" {
-		state.hasThinking = true
 	}
 }
 
@@ -437,10 +444,8 @@ func observeQualityAnthropic(state *qualityScanState, payload []byte) {
 			state.hasThinking = true
 		}
 		if event.Delta.Type == "signature_delta" && strings.TrimSpace(event.Delta.Signature) != "" {
-			// Anthropic Messages represents Responses encrypted_content as a
-			// signature delta. A non-empty signature is encrypted thinking proof.
+			// Signature is encrypted_content in Messages form. Not client-visible.
 			state.reasoningStarted = true
-			state.hasThinking = true
 		}
 		if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
 			noteVisibleContent(state, event.Delta.Text)
@@ -478,7 +483,7 @@ func peekQualityStream(ctx context.Context, body io.ReadCloser, protocol string,
 	for {
 		sig := state.signals()
 		if verdict := ClassifyQualityHold(sig, cfg.MinOutputTokens); verdict != QualityWait {
-			return newPrefixReplay(&held, pump), verdict, state.usage, state.responseID, nil
+			return newPrefixReplay(&held, pump), verdict, state.peekUsage(), state.responseID, nil
 		}
 		// A completed empty stream must rotate immediately. Waiting for idle
 		// timeout after response.completed / [DONE] surfaces HTTP 200 with 0
@@ -490,11 +495,11 @@ func peekQualityStream(ctx context.Context, body io.ReadCloser, protocol string,
 		select {
 		case <-ctx.Done():
 			_ = pump.Close()
-			return io.NopCloser(bytes.NewReader(held.Bytes())), QualityWait, state.usage, state.responseID, qualityPeekAbortError(ctx, ctx.Err())
+			return io.NopCloser(bytes.NewReader(held.Bytes())), QualityWait, state.peekUsage(), state.responseID, qualityPeekAbortError(ctx, ctx.Err())
 		case <-holdTimer.C:
 			sig.HoldExpired = true
 			if verdict := ClassifyQualityHold(sig, cfg.MinOutputTokens); verdict != QualityWait {
-				return newPrefixReplay(&held, pump), verdict, state.usage, state.responseID, nil
+				return newPrefixReplay(&held, pump), verdict, state.peekUsage(), state.responseID, nil
 			}
 		case result, ok := <-pump.results:
 			if !ok {
@@ -503,7 +508,7 @@ func peekQualityStream(ctx context.Context, body io.ReadCloser, protocol string,
 			if len(result.data) > 0 {
 				if held.Len()+len(result.data) > qualityHoldMaxBufferBytes {
 					_, _ = held.Write(result.data)
-					return newPrefixReplay(&held, pump), QualityDeliver, state.usage, state.responseID, nil
+					return newPrefixReplay(&held, pump), QualityDeliver, state.peekUsage(), state.responseID, nil
 				}
 				_, _ = held.Write(result.data)
 				ObserveQualityChunk(&state, result.data)
@@ -513,7 +518,7 @@ func peekQualityStream(ctx context.Context, body io.ReadCloser, protocol string,
 			}
 			if result.err != nil {
 				_ = pump.Close()
-				return io.NopCloser(bytes.NewReader(held.Bytes())), QualityWait, state.usage, state.responseID, qualityPeekAbortError(ctx, result.err)
+				return io.NopCloser(bytes.NewReader(held.Bytes())), QualityWait, state.peekUsage(), state.responseID, qualityPeekAbortError(ctx, result.err)
 			}
 		}
 	}
@@ -532,11 +537,11 @@ func finishQualityPeek(held *bytes.Buffer, pump *qualityReadPump, state *quality
 	signals := state.signals()
 	if !signals.HasThinking && signals.ReasoningTokens <= 0 && signals.OutputTokens <= 0 && signals.VisibleTokens <= 0 {
 		if state.semanticOutput {
-			return newPrefixReplay(held, pump), QualityDeliver, state.usage, state.responseID, nil
+			return newPrefixReplay(held, pump), QualityDeliver, state.peekUsage(), state.responseID, nil
 		}
-		return newPrefixReplay(held, pump), QualityWait, state.usage, state.responseID, errQualityEmptyStream
+		return newPrefixReplay(held, pump), QualityWait, state.peekUsage(), state.responseID, errQualityEmptyStream
 	}
-	return newPrefixReplay(held, pump), ClassifyQualityHold(signals, cfg.MinOutputTokens), state.usage, state.responseID, nil
+	return newPrefixReplay(held, pump), ClassifyQualityHold(signals, cfg.MinOutputTokens), state.peekUsage(), state.responseID, nil
 }
 
 func newPrefixReplay(held *bytes.Buffer, rest io.ReadCloser) io.ReadCloser {

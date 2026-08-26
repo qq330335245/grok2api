@@ -120,21 +120,14 @@ func (s *Service) qualityRetryConfig() QualityRetryRuntime {
 }
 
 // ClassifyQualityHold decides whether a held stream may be forwarded.
-// Streamed thinking always delivers: reasoning/summary deltas, or a
-// reasoning item with encrypted_content. Usage.reasoning_tokens alone
-// does not — degraded upstreams fill that field without ciphertext or
-// deltas. A finished sample with enough visible output and no streamed
-// thinking is withheld.
+// Only client-visible thinking text counts (reasoning_content / summary or
+// reasoning_text deltas). Usage.reasoning_tokens, empty reasoning items, and
+// encrypted_content alone do not — Cherry/Pi cannot see those, and degraded
+// accounts still fill usage. A finished or expired sample with enough visible
+// output and no streamed thinking is withheld so anti-degrade can retry the
+// same account on another ExitIP.
 // Short replies below minOutput are delivered so "ok"/"yes" is not retried.
-// A hold timeout with no visible output is not fail-open: keep waiting for
-// more bytes or a stream abort so an empty hang is not flushed as HTTP 200.
-//
-// An empty reasoning stub is not thinking. Before the hold deadline, wait for
-// real evidence or a terminal event. If the deadline expires while the stream
-// is still open and already has visible output, the result is inconclusive:
-// release it without penalizing the account. A stub-only empty stream keeps
-// waiting for idle/terminal handling. This keeps HoldTimeout a real latency
-// bound without reopening the empty-stream 200 response path.
+// A hold timeout with no visible output keeps waiting for more bytes or abort.
 func ClassifyQualityHold(sig QualityStreamSignals, minOutput int64) QualityVerdict {
 	if minOutput <= 0 {
 		minOutput = defaultQualityMinOutput
@@ -151,12 +144,6 @@ func ClassifyQualityHold(sig QualityStreamSignals, minOutput int64) QualityVerdi
 		output = sig.OutputTokens
 	}
 	enough := output >= minOutput
-	if sig.ReasoningStarted && !sig.Terminal {
-		if sig.HoldExpired && output > 0 {
-			return QualityDeliver
-		}
-		return QualityWait
-	}
 	if sig.Terminal {
 		if output <= 0 {
 			return QualityWait
@@ -172,9 +159,6 @@ func ClassifyQualityHold(sig QualityStreamSignals, minOutput int64) QualityVerdi
 	if sig.HoldExpired {
 		if output <= 0 {
 			return QualityWait
-		}
-		if enough {
-			return QualityWithhold
 		}
 		return QualityDeliver
 	}
@@ -450,6 +434,7 @@ func (s *Service) recordQualityDegraded(ctx context.Context, base audit.Record, 
 	record.ErrorCode = ErrorQualityDegraded
 	record.OutputTokens = usage.OutputTokens
 	record.ReasoningTokens = usage.ReasoningTokens
+	record.StreamedThinking = usage.StreamedThinking
 	record.TotalTokens = usage.TotalTokens
 	record.InputTokens = usage.InputTokens
 	if usage.Reported {

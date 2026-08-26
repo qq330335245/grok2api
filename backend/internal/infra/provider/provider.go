@@ -454,6 +454,7 @@ type CredentialSeed struct {
 	OIDCClientID            string
 	AccessToken             string
 	RefreshToken            string
+	SSOToken                string
 	CloudflareCookies       string
 	ExpiresAt               time.Time
 	WebNSFWEnabledAt        *time.Time
@@ -778,6 +779,12 @@ type WebAccountSettingsAdapter interface {
 	AcceptTerms(ctx context.Context, credential account.Credential) error
 	SetBirthDate(ctx context.Context, credential account.Credential, birthDate time.Time) error
 	EnableNSFW(ctx context.Context, credential account.Credential) error
+}
+
+// HomeBotFlagInspector reads grok.com homepage botFlagSource using a Web SSO token.
+type HomeBotFlagInspector interface {
+	Adapter
+	InspectHomeBotFlag(ctx context.Context, ssoToken string) (source int, httpStatus int, err error)
 }
 
 // ImageGenerationAdapter defines an optional Provider image-generation capability.
@@ -1207,6 +1214,15 @@ func (r *Registry) WebAccountSettings() (WebAccountSettingsAdapter, bool) {
 		return nil, false
 	}
 	result, ok := adapter.(WebAccountSettingsAdapter)
+	return result, ok
+}
+
+func (r *Registry) HomeBotFlag() (HomeBotFlagInspector, bool) {
+	adapter, ok := r.Get(account.ProviderWeb)
+	if !ok {
+		return nil, false
+	}
+	result, ok := adapter.(HomeBotFlagInspector)
 	return result, ok
 }
 

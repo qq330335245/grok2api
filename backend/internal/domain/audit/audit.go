@@ -99,6 +99,7 @@ type Record struct {
 	CachedInputTokens       int64
 	OutputTokens            int64
 	ReasoningTokens         int64
+	StreamedThinking        bool
 	TotalTokens             int64
 	CostInUSDTicks          int64
 	EstimatedCostInUSDTicks int64

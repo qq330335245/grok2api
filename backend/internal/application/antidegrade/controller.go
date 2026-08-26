@@ -13,7 +13,10 @@ import (
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 )
 
-var ErrNoEligibleExitIP = errors.New("没有可用的干净出口 IP")
+var (
+	ErrNoEligibleExitIP   = errors.New("没有可用的干净出口 IP")
+	ErrAccountQuarantined = errors.New("账号因缺少推理被隔离")
+)
 
 // Node is a scheduling snapshot of one Build egress node.
 type Node struct {
@@ -31,15 +34,21 @@ type AccountDisabler interface {
 	Disable(context.Context, uint64) error
 }
 
+// PageBotFlagInspector reads grok.com homepage botFlagSource from the Build account's own SSO.
+type PageBotFlagInspector interface {
+	Inspect(ctx context.Context, credential accountdomain.Credential) (int, error)
+}
+
 // Controller is the request-path ExitIP ledger: density, cooldown, score, delayed botflag=2.
 type Controller struct {
-	mu       sync.Mutex
-	cfg      Config
-	ledger   *ledger
-	nodes    NodeSource
-	accounts AccountDisabler
-	logger   *slog.Logger
-	rng      *rand.Rand
+	mu        sync.Mutex
+	cfg       Config
+	ledger    *ledger
+	nodes     NodeSource
+	accounts  AccountDisabler
+	inspector PageBotFlagInspector
+	logger    *slog.Logger
+	rng       *rand.Rand
 }
 
 func New(cfg Config, nodes NodeSource, accounts AccountDisabler, logger *slog.Logger) *Controller {
@@ -61,6 +70,13 @@ func New(cfg Config, nodes NodeSource, accounts AccountDisabler, logger *slog.Lo
 	return controller
 }
 
+func (c *Controller) SetPageInspector(inspector PageBotFlagInspector) {
+	if c == nil {
+		return
+	}
+	c.inspector = inspector
+}
+
 func (c *Controller) Enabled() bool { return c != nil && c.cfg.Enabled }
 func (c *Controller) Enforce() bool { return c != nil && c.cfg.Enforce() }
 func (c *Controller) MaxIPRetries() int {
@@ -74,6 +90,27 @@ func (c *Controller) ThinkingMinOutput() int64 {
 		return 32
 	}
 	return c.cfg.Normalize().ThinkingMinOutput
+}
+
+func (c *Controller) AccountQuarantined(accountID uint64) bool {
+	if c == nil || accountID == 0 {
+		return false
+	}
+	now := c.ledger.now()
+	c.ledger.mu.Lock()
+	defer c.ledger.mu.Unlock()
+	return c.ledger.accountQuarantined(accountID, now)
+}
+
+func (c *Controller) ClearAccount(_ context.Context, accountID uint64) {
+	if c == nil || accountID == 0 {
+		return
+	}
+	c.ledger.mu.Lock()
+	c.ledger.clearAccountQuarantine(accountID)
+	c.ledger.mu.Unlock()
+	_ = c.ledger.persist()
+	c.logger.Info("antidegrade_account_quarantine_cleared", "account_id", accountID)
 }
 
 func (c *Controller) Update(cfg Config) {
@@ -196,6 +233,9 @@ func (c *Controller) Admit(ctx context.Context, credential accountdomain.Credent
 	if c == nil || !c.Enforce() {
 		return 0, nil
 	}
+	if c.AccountQuarantined(credential.ID) {
+		return 0, ErrAccountQuarantined
+	}
 	cfg := c.config()
 	nodes, err := c.lookup(ctx)
 	if err != nil {
@@ -250,28 +290,67 @@ func (c *Controller) OnMissingThinking(ctx context.Context, credential accountdo
 	}
 	now := c.ledger.now()
 	c.ledger.mu.Lock()
+	already := c.ledger.accountQuarantined(credential.ID, now)
 	c.ledger.rememberNode(key, nodeID)
 	c.ledger.noteWindow(key, credential.ID, cfg.DensityWindow, now)
 	c.ledger.recordEvent(key, credential.ID, false, now)
 	distinct := 0
+	promoted := false
+	lifted := []string(nil)
 	if cfg.Enforce() {
-		c.ledger.cool(key, reasonDirtyIP, now.Add(cfg.DirtyIPCooldown))
-		distinct = c.ledger.noteAccountFail(credential.ID, key, now)
+		if already {
+			distinct = c.ledger.distinctFailCount(credential.ID, now)
+		} else {
+			c.ledger.cool(key, reasonDirtyIP, now.Add(cfg.DirtyIPCooldown))
+			distinct = c.ledger.noteAccountFail(credential.ID, key, now)
+			if distinct >= cfg.AccountIPFailThreshold {
+				lifted = c.ledger.quarantineAccount(credential.ID, now.Add(cfg.AccountQuarantineTTL), reasonQuarantine)
+				promoted = true
+			}
+		}
 	}
 	c.ledger.mu.Unlock()
 	_ = c.ledger.persist()
-	c.logger.Info("antidegrade_missing_thinking", "account_id", credential.ID, "node_id", nodeID, "exit_ip", key, "distinct_fail_ips", distinct)
-	if !cfg.Enforce() || distinct < cfg.AccountIPFailThreshold {
+	c.logger.Info("antidegrade_missing_thinking", "account_id", credential.ID, "node_id", nodeID, "exit_ip", key, "distinct_fail_ips", distinct, "quarantined", already || promoted, "lifted_ips", lifted)
+	if !promoted {
 		return
 	}
+	// SSO is optional and must not block quarantine. botFlag=2 may still
+	// upgrade the soft isolation into a permanent disable.
 	c.maybeBanAccount(ctx, credential, key, now)
 }
 
 func (c *Controller) maybeBanAccount(ctx context.Context, credential accountdomain.Credential, lastIP string, now time.Time) {
-	if credential.BuildBotFlagSource != 2 {
-		c.logger.Info("antidegrade_botflag_skip", "account_id", credential.ID, "bot_flag_source", credential.BuildBotFlagSource, "reason", "not_flag_2")
+	if c.inspector != nil {
+		go c.inspectAndMaybeBan(credential, lastIP, now)
 		return
 	}
+	c.banIfSourceTwo(ctx, credential, lastIP, now, credential.BuildBotFlagSource)
+}
+
+func (c *Controller) inspectAndMaybeBan(credential accountdomain.Credential, lastIP string, now time.Time) {
+	if c == nil || c.inspector == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	source, err := c.inspector.Inspect(ctx, credential)
+	if err != nil {
+		c.logger.Warn("antidegrade_botflag_inspect_failed", "account_id", credential.ID, "error", err)
+		return
+	}
+	c.banIfSourceTwo(ctx, credential, lastIP, now, source)
+}
+
+func (c *Controller) banIfSourceTwo(ctx context.Context, credential accountdomain.Credential, lastIP string, now time.Time, source int) {
+	if source != 2 {
+		c.logger.Info("antidegrade_botflag_skip", "account_id", credential.ID, "bot_flag_source", source, "reason", "unclassified_or_not_flag_2")
+		return
+	}
+	c.banAccount(ctx, credential, lastIP, now, "page_botflag_2")
+}
+
+func (c *Controller) banAccount(ctx context.Context, credential accountdomain.Credential, lastIP string, now time.Time, reason string) {
 	cfg := c.config()
 	c.ledger.mu.Lock()
 	c.ledger.cool(lastIP, reasonFarm, now.Add(cfg.FarmIPCooldown))
@@ -285,7 +364,7 @@ func (c *Controller) maybeBanAccount(ctx context.Context, credential accountdoma
 		c.logger.Error("antidegrade_account_ban_failed", "account_id", credential.ID, "error", err)
 		return
 	}
-	c.logger.Info("antidegrade_account_banned", "account_id", credential.ID, "bot_flag_source", 2, "exit_ip", lastIP)
+	c.logger.Info("antidegrade_account_banned", "account_id", credential.ID, "reason", reason, "exit_ip", lastIP)
 }
 
 func (c *Controller) ClearForNode(ctx context.Context, nodeID uint64) {

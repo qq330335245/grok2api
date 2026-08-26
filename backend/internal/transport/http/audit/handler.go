@@ -112,6 +112,7 @@ type auditResponse struct {
 	CachedInputTokens       int64                     `json:"cachedInputTokens"`
 	OutputTokens            int64                     `json:"outputTokens"`
 	ReasoningTokens         int64                     `json:"reasoningTokens"`
+	StreamedThinking        bool                      `json:"streamedThinking"`
 	TotalTokens             int64                     `json:"totalTokens"`
 	CostInUSDTicks          int64                     `json:"costInUsdTicks"`
 	EstimatedCostInUSDTicks int64                     `json:"estimatedCostInUsdTicks"`
@@ -487,7 +488,7 @@ func newAuditResponse(value auditdomain.Record) auditResponse {
 		StatusCode: value.StatusCode, Streaming: value.Streaming,
 		MediaInputImages: value.MediaInputImages, MediaOutputImages: value.MediaOutputImages, MediaOutputSeconds: value.MediaOutputSeconds,
 		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens, OutputTokens: value.OutputTokens,
-		ReasoningTokens: value.ReasoningTokens, TotalTokens: value.TotalTokens, CostInUSDTicks: value.CostInUSDTicks,
+		ReasoningTokens: value.ReasoningTokens, StreamedThinking: value.StreamedThinking, TotalTokens: value.TotalTokens, CostInUSDTicks: value.CostInUSDTicks,
 		EstimatedCostInUSDTicks: value.EstimatedCostInUSDTicks, PricingModel: value.PricingModel, PricingVersion: value.PricingVersion,
 		Billing:        newBillingBreakdown(value),
 		NumSourcesUsed: value.NumSourcesUsed, NumServerSideToolsUsed: value.NumServerSideToolsUsed,

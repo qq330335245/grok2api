@@ -118,6 +118,11 @@ const (
 	LastErrorMissingThinkingDisabled = "missing_thinking_disabled"
 )
 
+const (
+	BuildBotFlagOriginJWT  = "jwt"
+	BuildBotFlagOriginPage = "page"
+)
+
 // NormalizeHealthMarker admits only durable non-sensitive health markers.
 func NormalizeHealthMarker(value string) string {
 	switch value {
@@ -155,6 +160,9 @@ type Credential struct {
 	EncryptedAccessToken      string
 	EncryptedRefreshToken     string
 	EncryptedCloudflareCookie string
+	// EncryptedSSOToken 是 Build 账号自带的 Grok Web SSO，供 grok.com 页面风控检测使用。
+	// 与 OAuth access/refresh 独立；空表示未配置，不得用 JWT bfs 代替。
+	EncryptedSSOToken string
 	ExpiresAt                 time.Time
 	RefreshDueAt              *time.Time
 	LastRefreshAt             *time.Time
@@ -220,6 +228,9 @@ type Credential struct {
 	// BuildBotFlagSource 是从 Build access token 提取并持久化的非敏感路由元数据。
 	// 仅精确值 1、2 表示风控；0 表示未标记或非 Build 账号。
 	BuildBotFlagSource int
+	// BuildBotFlagOrigin 记录风控来源：jwt 为 OAuth access token 声明，page 为 grok.com 首页 botFlagSource。
+	// page 优先，后续 JWT 刷新不得覆盖。
+	BuildBotFlagOrigin string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
@@ -234,6 +245,7 @@ type CredentialMaterial struct {
 	EncryptedAccessToken         string
 	EncryptedRefreshToken        string
 	EncryptedCloudflareCookie    string
+	EncryptedSSOToken            string
 	ExpiresAt                    time.Time
 	RefreshDueAt                 *time.Time
 	LastRefreshAt                *time.Time
@@ -259,6 +271,7 @@ func (m CredentialMaterial) ApplyTo(value Credential) (Credential, bool) {
 	value.EncryptedAccessToken = m.EncryptedAccessToken
 	value.EncryptedRefreshToken = m.EncryptedRefreshToken
 	value.EncryptedCloudflareCookie = m.EncryptedCloudflareCookie
+	value.EncryptedSSOToken = m.EncryptedSSOToken
 	value.ExpiresAt = m.ExpiresAt
 	value.RefreshDueAt = m.RefreshDueAt
 	value.LastRefreshAt = m.LastRefreshAt

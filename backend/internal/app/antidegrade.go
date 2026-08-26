@@ -7,6 +7,7 @@ import (
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	"github.com/chenyme/grok2api/backend/internal/application/antidegrade"
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
+	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	"github.com/chenyme/grok2api/backend/internal/repository"
@@ -23,6 +24,7 @@ func antiDegradeRuntime(value config.AntiDegradeConfig) antidegrade.Config {
 		FarmIPCooldown:         value.FarmIPCooldown.Value(),
 		MaxIPRetries:           value.MaxIPRetries,
 		AccountIPFailThreshold: value.AccountIPFailThreshold,
+		AccountQuarantineTTL:   value.AccountQuarantineTTL.Value(),
 		ScorePrior:             value.ScorePrior,
 		ExploreRatio:           value.ExploreRatio,
 		OperatorOverride:       value.OperatorOverride.Value(),
@@ -58,6 +60,16 @@ func (a antiDegradeAccounts) Disable(ctx context.Context, id uint64) error {
 	return err
 }
 
+type antiDegradeBotFlag struct {
+	svc *accountapp.Service
+}
+
+func (a antiDegradeBotFlag) Inspect(ctx context.Context, credential accountdomain.Credential) (int, error) {
+	return a.svc.InspectAndPersistPageBotFlag(ctx, credential)
+}
+
 func newAntiDegradeController(cfg config.AntiDegradeConfig, egress *egressapp.Service, accounts *accountapp.Service, logger *slog.Logger) *antidegrade.Controller {
-	return antidegrade.New(antiDegradeRuntime(cfg), antiDegradeNodes{svc: egress}, antiDegradeAccounts{svc: accounts}, logger)
+	controller := antidegrade.New(antiDegradeRuntime(cfg), antiDegradeNodes{svc: egress}, antiDegradeAccounts{svc: accounts}, logger)
+	controller.SetPageInspector(antiDegradeBotFlag{svc: accounts})
+	return controller
 }

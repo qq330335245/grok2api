@@ -53,6 +53,32 @@ func TestAccountFailCountsDistinctIPs(t *testing.T) {
 	}
 }
 
+func TestQuarantineKeepsFirstIPAndLiftsRest(t *testing.T) {
+	ledger := newLedger("")
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	ledger.cool("10.0.0.1", reasonDirtyIP, now.Add(30*time.Minute))
+	ledger.cool("10.0.0.2", reasonDirtyIP, now.Add(30*time.Minute))
+	ledger.noteAccountFail(3, "10.0.0.1", now)
+	ledger.noteAccountFail(3, "10.0.0.2", now.Add(time.Minute))
+	lifted := ledger.quarantineAccount(3, now.Add(2*time.Hour), reasonQuarantine)
+	if len(lifted) != 1 || lifted[0] != "10.0.0.2" {
+		t.Fatalf("lifted=%v", lifted)
+	}
+	if !ledger.cooling(ledger.ip("10.0.0.1"), now) {
+		t.Fatal("first IP must stay cooled")
+	}
+	if ledger.cooling(ledger.ip("10.0.0.2"), now) {
+		t.Fatal("second IP must be lifted")
+	}
+	if !ledger.accountQuarantined(3, now) {
+		t.Fatal("expected quarantine")
+	}
+	ledger.clearAccountQuarantine(3)
+	if ledger.accountQuarantined(3, now) {
+		t.Fatal("quarantine should clear")
+	}
+}
+
 func TestLedgerRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.json")
 	first := newLedger(path)

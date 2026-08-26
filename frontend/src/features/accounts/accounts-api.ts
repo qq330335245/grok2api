@@ -81,6 +81,7 @@ export type AccountDTO = {
   expiresAt?: string;
   refreshable: boolean;
   cloudflareCookieConfigured: boolean;
+  ssoConfigured?: boolean;
   buildSuperEntitled: boolean;
   buildRouteMode: BuildRouteMode;
   buildBotFlagged: boolean;
@@ -189,7 +190,7 @@ const linkedAccountValidator = hasShape({ id: isString, provider: isOneOf("grok_
 const accountValidator = hasShape({
   id: isString, provider: isOneOf("grok_build", "grok_web", "grok_console"), authType: isOneOf("oauth", "sso"), webTier: isOptional(isOneOf("auto", "basic", "super", "heavy")),
   webTierSyncedAt: isOptional(isString), nsfwEnabledAt: isOptional(isString), termsAcceptedAt: isOptional(isString), name: isString, email: isOptional(isString), userId: isOptional(isString), teamId: isOptional(isString),
-  enabled: isBoolean, authStatus: isOneOf("active", "reauthRequired"), expiresAt: isOptional(isString), refreshable: isBoolean, cloudflareCookieConfigured: isBoolean,
+  enabled: isBoolean, authStatus: isOneOf("active", "reauthRequired"), expiresAt: isOptional(isString), refreshable: isBoolean, cloudflareCookieConfigured: isBoolean, ssoConfigured: isOptional(isBoolean),
   buildSuperEntitled: isBoolean, buildRouteMode: isOneOf("auto", "build", "xai"), buildBotFlagged: isBoolean, buildBotFlagSource: isOptional(isNumber), modelSyncFailed: isOptional(isBoolean), refreshDueAt: isOptional(isString), lastRefreshAt: isOptional(isString), refreshFailureCount: isNumber,
   egressNodeId: isOptional(isString), egressAssignmentMode: isOptional(isOneOf("manual", "auto")),
   lastRefreshErrorStatus: isOptional(isNumber), lastRefreshErrorCode: isOptional(isString), lastRefreshErrorMessage: isOptional(isString), lastRefreshErrorResponse: isOptional(isString), priority: isNumber, maxConcurrent: isNumber, minimumRemaining: isNumber,
@@ -335,9 +336,10 @@ export type BuildDetectItemDTO = {
   id: string;
   name: string;
   email?: string;
-  outcome: "ok" | "invalid" | "failed";
+  outcome: "ok" | "invalid" | "failed" | "flagged";
   reason?: string;
   httpStatus?: number;
+  botFlagSource?: number;
 };
 
 export type BuildDetectHandlers = {
@@ -468,14 +470,20 @@ export type DetectBuildAccountsInput =
 export function detectBuildAccounts(input: DetectBuildAccountsInput, handlers?: BuildDetectHandlers | ((value: AccountTaskProgressDTO) => void), signal?: AbortSignal): Promise<AccountBatchResultDTO> {
   const body = input.all ? { provider: "grok_build" as const, all: true } : { provider: "grok_build" as const, ids: input.ids };
   const resolved: BuildDetectHandlers = typeof handlers === "function" ? { onProgress: handlers } : (handlers ?? {});
-  return runDetectBuildAccountsTask(body, resolved, signal);
+  return runDetectBuildAccountsTask("/api/admin/v1/accounts/detect", body, resolved, signal);
 }
 
-async function runDetectBuildAccountsTask(body: object, handlers: BuildDetectHandlers, signal?: AbortSignal): Promise<AccountBatchResultDTO> {
+export function detectBuildBotFlags(input: DetectBuildAccountsInput, handlers?: BuildDetectHandlers | ((value: AccountTaskProgressDTO) => void), signal?: AbortSignal): Promise<AccountBatchResultDTO> {
+  const body = input.all ? { provider: "grok_build" as const, all: true } : { provider: "grok_build" as const, ids: input.ids };
+  const resolved: BuildDetectHandlers = typeof handlers === "function" ? { onProgress: handlers } : (handlers ?? {});
+  return runDetectBuildAccountsTask("/api/admin/v1/accounts/detect-botflag", body, resolved, signal);
+}
+
+async function runDetectBuildAccountsTask(path: string, body: object, handlers: BuildDetectHandlers, signal?: AbortSignal): Promise<AccountBatchResultDTO> {
   let result: AccountBatchResultDTO | undefined;
   const progress = createAccountTaskProgressController({ onProgress: handlers.onProgress });
   try {
-    await apiEventStream("/api/admin/v1/accounts/detect", {
+    await apiEventStream(path, {
       method: "POST",
       headers: { Accept: "text/event-stream" },
       body,
@@ -485,7 +493,7 @@ async function runDetectBuildAccountsTask(body: object, handlers: BuildDetectHan
         progress.report({ completed: data.completed, total: data.total });
         return;
       }
-      if (event === "item" && typeof data.id === "string" && typeof data.name === "string" && (data.outcome === "ok" || data.outcome === "invalid" || data.outcome === "failed")) {
+      if (event === "item" && typeof data.id === "string" && typeof data.name === "string" && (data.outcome === "ok" || data.outcome === "invalid" || data.outcome === "failed" || data.outcome === "flagged")) {
         handlers.onItem?.({
           id: data.id,
           name: data.name,
@@ -493,6 +501,7 @@ async function runDetectBuildAccountsTask(body: object, handlers: BuildDetectHan
           outcome: data.outcome,
           reason: data.reason,
           httpStatus: data.httpStatus,
+          botFlagSource: typeof data.botFlagSource === "number" ? data.botFlagSource : undefined,
         });
         return;
       }

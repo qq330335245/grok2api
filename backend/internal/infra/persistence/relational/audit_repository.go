@@ -377,7 +377,7 @@ func toAuditModels(value audit.Record) (requestAuditModel, []requestAuditAttempt
 		StatusCode: value.StatusCode, Streaming: value.Streaming,
 		MediaInputImages: nonNegative(value.MediaInputImages), MediaOutputImages: nonNegative(value.MediaOutputImages), MediaOutputSeconds: nonNegative(value.MediaOutputSeconds),
 		InputTokens: nonNegative(value.InputTokens), CachedInputTokens: nonNegative(value.CachedInputTokens), OutputTokens: nonNegative(value.OutputTokens),
-		ReasoningTokens: nonNegative(value.ReasoningTokens), TotalTokens: nonNegative(value.TotalTokens), CostInUSDTicks: nonNegative(value.CostInUSDTicks),
+		ReasoningTokens: nonNegative(value.ReasoningTokens), StreamedThinking: value.StreamedThinking, TotalTokens: nonNegative(value.TotalTokens), CostInUSDTicks: nonNegative(value.CostInUSDTicks),
 		EstimatedCostInUSDTicks: nonNegative(value.EstimatedCostInUSDTicks), PricingModel: truncate(value.PricingModel, 100), PricingVersion: truncate(value.PricingVersion, 20),
 		NumSourcesUsed: nonNegative(value.NumSourcesUsed), NumServerSideToolsUsed: nonNegative(value.NumServerSideToolsUsed),
 		ContextInputTokens: nonNegative(value.ContextInputTokens), ContextOutputTokens: nonNegative(value.ContextOutputTokens), FirstTokenMS: normalizedFirstToken(value), DurationMS: nonNegative(value.DurationMS),

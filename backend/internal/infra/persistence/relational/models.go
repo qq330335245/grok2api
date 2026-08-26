@@ -73,6 +73,7 @@ type accountCredentialModel struct {
 	EncryptedPrimary                string `gorm:"type:text;not null;default:'';check:chk_account_credentials_secret,((auth_type = 'oauth' AND (encrypted_primary <> '' OR encrypted_refresh <> '')) OR (auth_type = 'sso' AND encrypted_primary <> '' AND encrypted_refresh = '')) AND length(encrypted_primary) <= 65536 AND length(encrypted_refresh) <= 65536"`
 	EncryptedRefresh                string `gorm:"type:text;not null;default:''"`
 	EncryptedCloudflareCookie       string `gorm:"type:text;not null;default:'';check:chk_account_credentials_cf_cookie,length(encrypted_cloudflare_cookie) <= 65536"`
+	EncryptedSSO                    string `gorm:"column:encrypted_sso;type:text;not null;default:'';check:chk_account_credentials_sso,length(encrypted_sso) <= 65536"`
 	ExpiresAt                       *time.Time
 	RefreshDueAt                    *time.Time
 	LastRefreshAt                   *time.Time
@@ -84,6 +85,7 @@ type accountCredentialModel struct {
 	LastRefreshErrorResponse        string        `gorm:"size:4096;not null;default:'';check:chk_account_credentials_refresh_error_response,length(last_refresh_error_response) <= 4096"`
 	RefreshPermanent                bool          `gorm:"not null;default:false"`
 	BuildBotFlagSource              int           `gorm:"not null;default:0;check:chk_account_credentials_build_bot_flag_source,build_bot_flag_source IN (0,1,2)"`
+	BuildBotFlagOrigin              string        `gorm:"size:16;not null;default:'';check:chk_account_credentials_build_bot_flag_origin,build_bot_flag_origin IN ('','jwt','page')"`
 	UpdatedAt                       time.Time     `gorm:"not null"`
 	Account                         *accountModel `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 }
@@ -330,6 +332,7 @@ type requestAuditModel struct {
 	CachedInputTokens       int64     `gorm:"not null;default:0"`
 	OutputTokens            int64     `gorm:"not null;default:0"`
 	ReasoningTokens         int64     `gorm:"not null;default:0"`
+	StreamedThinking        bool      `gorm:"not null;default:false"`
 	TotalTokens             int64     `gorm:"not null;default:0"`
 	CostInUSDTicks          int64     `gorm:"not null;default:0"`
 	EstimatedCostInUSDTicks int64     `gorm:"not null;default:0"`

@@ -52,6 +52,7 @@ export type AuditDTO = {
   cachedInputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
+  streamedThinking?: boolean;
   totalTokens: number;
   costInUsdTicks: number;
   estimatedCostInUsdTicks: number;
@@ -153,7 +154,7 @@ const auditValidator = hasShape({
   egressScope: isOptional(isOneOf("grok_build", "grok_web", "grok_console", "grok_web_asset", "grok_console_asset")), egressMode: isOptional(isOneOf("direct", "proxy")),
   statusCode: isNumber, streaming: isBoolean,
   mediaInputImages: isNumber, mediaOutputImages: isNumber, mediaOutputSeconds: isNumber, inputTokens: isNumber,
-  cachedInputTokens: isNumber, outputTokens: isNumber, reasoningTokens: isNumber, totalTokens: isNumber,
+  cachedInputTokens: isNumber, outputTokens: isNumber, reasoningTokens: isNumber, streamedThinking: isOptional(isBoolean), totalTokens: isNumber,
   costInUsdTicks: isNumber, estimatedCostInUsdTicks: isNumber, pricingModel: isOptional(isString), pricingVersion: isOptional(isString), billing: isOptional(auditBillingValidator),
   numSourcesUsed: isNumber, numServerSideToolsUsed: isNumber, contextInputTokens: isNumber, contextOutputTokens: isNumber,
   firstTokenMs: isOptional(isNumber), outputTokensPerSecond: isOptional(isNumber),

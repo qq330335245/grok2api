@@ -45,6 +45,7 @@ import {
   enableWebAccountNSFW,
   convertWebAccountsToBuild,
   detectBuildAccounts,
+  detectBuildBotFlags,
   exportAccountBatch,
   exportSelectedAccounts,
   getAccountSummary,
@@ -102,7 +103,7 @@ type BuildQuotaTask = "sync" | "reset";
 type EgressConfigurationTask = "bind" | "unbind";
 type BuildDetectCounts = Record<BuildDetectItemDTO["outcome"], number>;
 
-const emptyBuildDetectCounts = (): BuildDetectCounts => ({ ok: 0, invalid: 0, failed: 0 });
+const emptyBuildDetectCounts = (): BuildDetectCounts => ({ ok: 0, invalid: 0, failed: 0, flagged: 0 });
 
 const egressFilterNodePageSize = 100;
 const egressFilterSourcePageSize = 100;
@@ -167,6 +168,7 @@ export function AccountsPage() {
   const [syncAllOpen, setSyncAllOpen] = useState(false);
   const [detectDialogOpen, setDetectDialogOpen] = useState(false);
   const [detectMode, setDetectMode] = useState<"selected" | "all">("all");
+  const [detectKind, setDetectKind] = useState<"liveness" | "botflag">("liveness");
   const [allQuotaTask, setAllQuotaTask] = useState<BuildQuotaTask>("sync");
   const [quotaSyncProgress, setQuotaSyncProgress] = useState<AccountTaskProgressDTO | null>(null);
   const [detectProgress, setDetectProgress] = useState<AccountTaskProgressDTO | null>(null);
@@ -786,14 +788,17 @@ export function AccountsPage() {
         onProgress: setDetectProgress,
         onItem: appendDetectItem,
       };
+      const detect = detectKind === "botflag" ? detectBuildBotFlags : detectBuildAccounts;
       if (mode === "all") {
-        return detectBuildAccounts({ all: true }, handlers, controller.signal);
+        return detect({ all: true }, handlers, controller.signal);
       }
-      return detectBuildAccounts({ ids: [...selected] }, handlers, controller.signal);
+      return detect({ ids: [...selected] }, handlers, controller.signal);
     },
     onSuccess: (result, mode) => {
       if (mode === "selected") clearSelection();
-      toast.success(t(mode === "all" ? "accounts.allDetected" : "accounts.batchDetected", result));
+      toast.success(t(detectKind === "botflag"
+        ? (mode === "all" ? "accounts.allBotFlagsDetected" : "accounts.batchBotFlagsDetected")
+        : (mode === "all" ? "accounts.allDetected" : "accounts.batchDetected"), result));
     },
     onError: (error) => { if (!isAbortError(error)) showError(error); },
     onSettled: () => {
@@ -802,8 +807,9 @@ export function AccountsPage() {
     },
   });
 
-  const openDetectDialog = (mode: "selected" | "all") => {
+  const openDetectDialog = (mode: "selected" | "all", kind: "liveness" | "botflag" = "liveness") => {
     setDetectMode(mode);
+    setDetectKind(kind);
     setDetectProgress(null);
     detectOutcomeByIDRef.current.clear();
     setDetectCounts(emptyBuildDetectCounts());
@@ -1275,7 +1281,7 @@ export function AccountsPage() {
     || webAccountScriptsMutation.isPending;
 
   const detectInvalidItems = detectItems.filter((item) => item.outcome === "invalid");
-  const detectVisibleItems = detectMode === "selected" ? detectItems : detectInvalidItems;
+  const detectVisibleItems = detectKind === "botflag" || detectMode === "selected" ? detectItems : detectInvalidItems;
 
   return (
     <div className="space-y-5">
@@ -1435,6 +1441,7 @@ export function AccountsPage() {
                 {provider === "grok_web" ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => openWebConversion([...selected])}>{t("accountConversion.action")}</Button> : null}
                 {provider === "grok_web" ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => setWebAccountScriptsTargets([...selected])}>{t("webAccountScripts.action")}</Button> : null}
                 {provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => openDetectDialog("selected")}>{t("accountCredential.detectAction")}</Button> : null}
+                {provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => openDetectDialog("selected", "botflag")}>{t("accountCredential.detectBotFlagAction")}</Button> : null}
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => {
                   if (provider === "grok_build") {
                     setBatchQuotaTask("sync");
@@ -1451,6 +1458,7 @@ export function AccountsPage() {
                 {provider === "grok_web" && hasProviderAccounts ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => openWebConversion("all")}>{t("accountConversion.action")}</Button> : null}
                 {provider === "grok_web" && hasProviderAccounts ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => setWebAccountScriptsTargets("all")}>{t("webAccountScripts.action")}</Button> : null}
                 {hasProviderAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => openDetectDialog("all")}>{t("accountCredential.detectAction")}</Button> : null}
+                {hasProviderAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => openDetectDialog("all", "botflag")}>{t("accountCredential.detectBotFlagAction")}</Button> : null}
                 {hasProviderAccounts ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => { setAllQuotaTask("sync"); setSyncAllOpen(true); }}>{t("accountCredential.quotaSyncAction")}</Button> : null}
                 {hasProviderAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => setRenewAllOpen(true)}>{t("accountCredential.refreshAction")}</Button> : null}
                 {hasProviderAccounts ? <Button variant="secondary" size="sm" className="bg-destructive/10 text-destructive hover:bg-destructive/15 hover:text-destructive" disabled={bulkTaskPending} onClick={() => { resetCleanupState(); setCleanupOpen(true); }}><Trash2 />{t("accounts.cleanupAction")}</Button> : null}
@@ -1600,8 +1608,12 @@ export function AccountsPage() {
       <Dialog open={detectDialogOpen} onOpenChange={closeDetectDialog}>
         <DialogContent className="max-w-xl gap-4 sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{detectMode === "all" ? t("accounts.detectAllTitle") : t("accounts.detectSelectedTitle", { count: selected.size })}</DialogTitle>
-            <DialogDescription>{detectMode === "all" ? t("accounts.detectAllDescription") : t("accounts.detectSelectedDescription", { count: selected.size })}</DialogDescription>
+            <DialogTitle>{detectKind === "botflag"
+              ? (detectMode === "all" ? t("accounts.detectBotFlagAllTitle") : t("accounts.detectBotFlagSelectedTitle", { count: selected.size }))
+              : (detectMode === "all" ? t("accounts.detectAllTitle") : t("accounts.detectSelectedTitle", { count: selected.size }))}</DialogTitle>
+            <DialogDescription>{detectKind === "botflag"
+              ? (detectMode === "all" ? t("accounts.detectBotFlagAllDescription") : t("accounts.detectBotFlagSelectedDescription", { count: selected.size }))
+              : (detectMode === "all" ? t("accounts.detectAllDescription") : t("accounts.detectSelectedDescription", { count: selected.size }))}</DialogDescription>
           </DialogHeader>
           {(detectMutation.isPending || detectProgress || detectVisibleItems.length > 0) ? (
             <div className="space-y-3">
@@ -1614,7 +1626,16 @@ export function AccountsPage() {
               {detectMode === "all" && detectCounts.invalid > 0 ? (
                 <p className="text-xs text-muted-foreground">{t("accounts.detectInvalidCount", { count: detectCounts.invalid })}</p>
               ) : null}
-              {detectMode === "selected" && (detectCounts.ok + detectCounts.invalid + detectCounts.failed) > 0 ? (
+              {detectKind === "botflag" && (detectCounts.ok + detectCounts.flagged + detectCounts.failed) > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {t("accounts.detectBotFlagSummary", {
+                    ok: detectCounts.ok,
+                    flagged: detectCounts.flagged,
+                    failed: detectCounts.failed,
+                  })}
+                </p>
+              ) : null}
+              {detectKind !== "botflag" && detectMode === "selected" && (detectCounts.ok + detectCounts.invalid + detectCounts.failed) > 0 ? (
                 <p className="text-xs text-muted-foreground">
                   {t("accounts.detectSelectedSummary", {
                     ok: detectCounts.ok,
@@ -1643,6 +1664,7 @@ export function AccountsPage() {
                             "mt-0.5 shrink-0",
                             item.outcome === "ok" && "border-emerald-500/40 text-emerald-700 dark:text-emerald-300",
                             item.outcome === "invalid" && "border-destructive/40 text-destructive",
+                            item.outcome === "flagged" && "border-destructive/40 text-destructive",
                             item.outcome === "failed" && "border-amber-500/40 text-amber-700 dark:text-amber-300",
                           )}
                         >

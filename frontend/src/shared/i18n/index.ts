@@ -954,6 +954,8 @@ const resources = {
         secondsCount: "{{count}} 秒",
         cached: "缓存",
         reasoning: "推理",
+        streamedThinkingYes: "流式思考：有",
+        streamedThinkingNo: "流式思考：无",
         reasoningEfforts: { auto: "自动", none: "关闭", low: "低", medium: "中", high: "高", xhigh: "极高", fixed: "固定" },
         costUsd: "成本 ${{value}}",
         sources: "来源 {{count}}",
@@ -1755,6 +1757,8 @@ const resources = {
         secondsCount: "{{count}} sec",
         cached: "Cached",
         reasoning: "Reasoning",
+        streamedThinkingYes: "Streamed thinking: yes",
+        streamedThinkingNo: "Streamed thinking: no",
         reasoningEfforts: { auto: "Auto", none: "Off", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", fixed: "Fixed" },
         costUsd: "Cost ${{value}}",
         sources: "Sources {{count}}",
@@ -2310,9 +2314,11 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, str
 
 Object.assign(resources["zh-CN"].translation.accountCredential as unknown as Record<string, string>, {
   detectAction: "检测账号",
+  detectBotFlagAction: "检测风控",
 });
 Object.assign(resources.en.translation.accountCredential as unknown as Record<string, string>, {
   detectAction: "Detect accounts",
+  detectBotFlagAction: "Detect bot risk",
 });
 Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<string, unknown>, {
   detectAllTitle: "检测全部 Grok Build 账号？",
@@ -2328,9 +2334,16 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
   detectWaitingResults: "正在等待账号检测结果。",
   detectNoInvalid: "未发现失效账号。",
   detectNoResults: "暂无检测结果。",
-  detectOutcome: { ok: "正常", invalid: "失效", failed: "失败" },
+  detectOutcome: { ok: "正常", invalid: "失效", failed: "失败", flagged: "风控" },
   batchDetected: "账号检测完成：成功 {{succeeded}}，失败 {{failed}}",
   allDetected: "全量检测完成：成功 {{succeeded}}，失败 {{failed}}",
+  detectBotFlagAllTitle: "检测全部 Grok Build 账号风控？",
+  detectBotFlagAllDescription: "使用账号自带 SSO 访问 grok.com 首页，读取页面 botFlagSource。不消耗 grok-4.5 探测，也不会把账号标为失效。",
+  detectBotFlagSelectedTitle: "检测选中的 {{count}} 个账号风控？",
+  detectBotFlagSelectedDescription: "用每个 Build 号上的 SSO 拉取 grok.com 首页 botFlagSource，并写回风控标记。",
+  detectBotFlagSummary: "正常 {{ok}} · 风控 {{flagged}} · 失败 {{failed}}",
+  batchBotFlagsDetected: "风控检测完成：成功 {{succeeded}}，失败 {{failed}}",
+  allBotFlagsDetected: "全量风控检测完成：成功 {{succeeded}}，失败 {{failed}}",
 });
 Object.assign(resources.en.translation.accounts as unknown as Record<string, unknown>, {
   detectAllTitle: "Detect all Grok Build accounts?",
@@ -2346,9 +2359,16 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
   detectWaitingResults: "Waiting for account detection results.",
   detectNoInvalid: "No invalid accounts found.",
   detectNoResults: "No detection results.",
-  detectOutcome: { ok: "Healthy", invalid: "Invalid", failed: "Failed" },
+  detectOutcome: { ok: "Healthy", invalid: "Invalid", failed: "Failed", flagged: "Flagged" },
   batchDetected: "Detection complete: {{succeeded}} succeeded, {{failed}} failed",
   allDetected: "Full detection complete: {{succeeded}} succeeded, {{failed}} failed",
+  detectBotFlagAllTitle: "Detect bot risk for all Grok Build accounts?",
+  detectBotFlagAllDescription: "Fetch grok.com with each account's own SSO and read page botFlagSource. This does not run the grok-4.5 liveness probe or mark credentials invalid.",
+  detectBotFlagSelectedTitle: "Detect bot risk for {{count}} selected accounts?",
+  detectBotFlagSelectedDescription: "Use the SSO stored on each Build account to read grok.com homepage botFlagSource and persist the risk mark.",
+  detectBotFlagSummary: "Healthy {{ok}} · Flagged {{flagged}} · Failed {{failed}}",
+  batchBotFlagsDetected: "Bot-risk detection complete: {{succeeded}} succeeded, {{failed}} failed",
+  allBotFlagsDetected: "Full bot-risk detection complete: {{succeeded}} succeeded, {{failed}} failed",
 });
 Object.assign(resources.en.translation.accounts as unknown as Record<string, string>, {
   freeConfirmedUsage: "{{used}} / {{limit}} tokens",

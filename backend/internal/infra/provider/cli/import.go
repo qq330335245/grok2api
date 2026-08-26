@@ -41,6 +41,8 @@ type importedCredentialEntry struct {
 	UserID       string `json:"user_id"`
 	PrincipalID  string `json:"principal_id"`
 	TeamID       string `json:"team_id"`
+		SSOToken     string `json:"sso_token"`
+	SSO          string `json:"sso"`
 }
 
 func marshalCredentials(values []provider.CredentialSeed) ([]byte, error) {
@@ -49,7 +51,7 @@ func marshalCredentials(values []provider.CredentialSeed) ([]byte, error) {
 		entry := importedCredentialEntry{
 			Provider: credentialImportProvider, Name: value.Name, ClientID: value.OIDCClientID,
 			AccessToken: value.AccessToken, RefreshToken: value.RefreshToken, TokenType: "Bearer",
-			Email: value.Email, UserID: value.UserID, TeamID: value.TeamID,
+			Email: value.Email, UserID: value.UserID, TeamID: value.TeamID, SSOToken: value.SSOToken,
 		}
 		if !value.ExpiresAt.IsZero() {
 			entry.ExpiresAt = value.ExpiresAt.UTC().Format(time.RFC3339Nano)
@@ -273,9 +275,13 @@ func normalizeImportedCredential(entry importedCredentialEntry) (provider.Creden
 	identity := firstNonEmpty(userID, strings.ToLower(email), teamID, refreshToken, accessToken)
 	sourceKey := "import:" + security.HashToken(strings.Join([]string{providerName, clientID, identity}, "|"))
 
+		ssoToken := sanitizeImportedSSOToken(firstNonEmpty(entry.SSOToken, entry.SSO))
+	if len(ssoToken) > maxImportedRefreshTokenBytes {
+		return provider.CredentialSeed{}, fmt.Errorf("sso_token 超过 16 KiB")
+	}
 	return provider.CredentialSeed{
 		Name: firstNonEmpty(entry.Name, email, userID, "Grok Build account"), Email: email, UserID: userID, TeamID: teamID,
-		SourceKey: sourceKey, OIDCClientID: clientID, AccessToken: accessToken, RefreshToken: refreshToken, ExpiresAt: expiresAt,
+		SourceKey: sourceKey, OIDCClientID: clientID, AccessToken: accessToken, RefreshToken: refreshToken, SSOToken: ssoToken, ExpiresAt: expiresAt,
 	}, nil
 }
 
@@ -329,4 +335,15 @@ func decodeJWTClaims(token string) map[string]any {
 func stringClaim(claims map[string]any, key string) string {
 	value, _ := claims[key].(string)
 	return value
+}
+
+func sanitizeImportedSSOToken(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "sso=") {
+		value = strings.TrimSpace(value[len("sso="):])
+	}
+	if token, _, found := strings.Cut(value, ";"); found {
+		value = strings.TrimSpace(token)
+	}
+	return strings.NewReplacer("\r", "", "\n", "", "\x00", "").Replace(value)
 }

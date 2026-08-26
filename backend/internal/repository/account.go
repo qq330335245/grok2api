@@ -26,6 +26,7 @@ type BuildBotFlagCredential struct {
 	AccountID            uint64
 	EncryptedAccessToken string
 	StoredSource         int
+	StoredOrigin         string
 }
 
 type BuildBotFlagSourceUpdate struct {

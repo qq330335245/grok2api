@@ -160,6 +160,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/batch/refresh-quotas", h.batchRefreshQuotas)
 	router.POST("/accounts/batch/refresh-tokens", h.batchRefreshTokens)
 	router.POST("/accounts/detect", h.detectBuildAccounts)
+	router.POST("/accounts/detect-botflag", h.detectBuildBotFlags)
 	router.PATCH("/accounts/batch", h.batchUpdate)
 	router.POST("/accounts/deletion-preview", h.previewDeletion)
 	router.DELETE("/accounts", h.batchDelete)
@@ -179,6 +180,8 @@ type updateRequest struct {
 	MinimumRemaining       *float64                      `json:"minimumRemaining"`
 	CloudflareCookies      *string                       `json:"cloudflareCookies"`
 	ClearCloudflareCookies bool                          `json:"clearCloudflareCookies"`
+	SSOToken               *string                       `json:"ssoToken"`
+	ClearSSOToken          bool                          `json:"clearSsoToken"`
 	BuildSuperEntitled     *bool                         `json:"buildSuperEntitled"`
 	BuildRouteMode         *accountdomain.BuildRouteMode `json:"buildRouteMode"`
 }
@@ -251,12 +254,13 @@ type accountTaskProgressResponse struct {
 
 // accountDetectItemResponse 是检测任务的单账号增量事件；全量检测仅推送 invalid。
 type accountDetectItemResponse struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Email      string `json:"email,omitempty"`
-	Outcome    string `json:"outcome"`
-	Reason     string `json:"reason,omitempty"`
-	HTTPStatus int    `json:"httpStatus,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Email         string `json:"email,omitempty"`
+	Outcome       string `json:"outcome"`
+	Reason        string `json:"reason,omitempty"`
+	HTTPStatus    int    `json:"httpStatus,omitempty"`
+	BotFlagSource int    `json:"botFlagSource,omitempty"`
 }
 
 type accountBatchResponse struct {
@@ -320,6 +324,7 @@ type accountResponse struct {
 	ObservedModel              string                  `json:"observedModel,omitempty"`
 	ObservedModelAt            *time.Time              `json:"observedModelAt,omitempty"`
 	CloudflareCookieConfigured bool                    `json:"cloudflareCookieConfigured"`
+	SSOConfigured              bool                    `json:"ssoConfigured,omitempty"`
 	BuildSuperEntitled         bool                    `json:"buildSuperEntitled"`
 	BuildRouteMode             string                  `json:"buildRouteMode"`
 	BuildBotFlagged            bool                    `json:"buildBotFlagged"`
@@ -605,6 +610,51 @@ func (h *Handler) detectBuildAccounts(c *gin.Context) {
 	succeeded, failed, err := h.service.DetectBuildAccountsWithProgress(c.Request.Context(), ids, request.All, stream.ProgressObserver(), itemObserver)
 	if err != nil {
 		stream.WriteError("accountDetectFailed", "检测 Grok Build 账号失败")
+		return
+	}
+	_ = stream.Write("complete", accountBatchResponse{Succeeded: succeeded, Failed: failed})
+}
+
+func (h *Handler) detectBuildBotFlags(c *gin.Context) {
+	var request detectBuildAccountsRequest
+	if c.Request.Body != nil {
+		if err := json.NewDecoder(c.Request.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+			response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
+			return
+		}
+	}
+	if request.Provider != "" && request.Provider != string(accountdomain.ProviderBuild) {
+		response.Error(c, http.StatusBadRequest, "invalidProvider", "仅 Grok Build 账号支持 SSO 风控检测")
+		return
+	}
+	hasIDs := len(request.IDs) > 0
+	if request.All == hasIDs {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "必须明确选择全部账号或提供非空账号 ID")
+		return
+	}
+	var ids []uint64
+	if hasIDs {
+		parsed, err := parseIDs(request.IDs)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
+			return
+		}
+		if !h.validateProviderIDs(c, parsed, string(accountdomain.ProviderBuild)) {
+			return
+		}
+		ids = parsed
+	}
+	stream := newAccountEventStream(c)
+	defer stream.Close()
+	itemObserver := func(item accountapp.BuildDetectItemResult) error {
+		return stream.Write("item", accountDetectItemResponse{
+			ID: strconv.FormatUint(item.AccountID, 10), Name: item.Name, Email: item.Email,
+			Outcome: string(item.Outcome), Reason: item.Reason, HTTPStatus: item.HTTPStatus, BotFlagSource: item.BotFlagSource,
+		})
+	}
+	succeeded, failed, err := h.service.DetectBuildBotFlagsWithProgress(c.Request.Context(), ids, request.All, stream.ProgressObserver(), itemObserver)
+	if err != nil {
+		stream.WriteError("accountDetectFailed", "检测 Grok Build SSO 风控失败")
 		return
 	}
 	_ = stream.Write("complete", accountBatchResponse{Succeeded: succeeded, Failed: failed})
@@ -1252,6 +1302,7 @@ func (h *Handler) update(c *gin.Context) {
 		Name: request.Name, Enabled: request.Enabled, Priority: request.Priority,
 		MaxConcurrent: request.MaxConcurrent, MinimumRemaining: request.MinimumRemaining,
 		CloudflareCookies: request.CloudflareCookies, ClearCloudflareCookies: request.ClearCloudflareCookies,
+		SSOToken: request.SSOToken, ClearSSOToken: request.ClearSSOToken,
 		BuildSuperEntitled: request.BuildSuperEntitled, BuildRouteMode: request.BuildRouteMode,
 	})
 	if err != nil {
@@ -1513,6 +1564,7 @@ func newAccountResponse(value accountapp.View) accountResponse {
 		LastUsedAt: c.LastUsedAt, LinkedAccountID: c.LinkedAccountID, LinkedName: c.LinkedAccountName, LinkedProvider: string(c.LinkedProvider),
 		CreatedAt: c.CreatedAt, ObservedModel: c.ObservedModel, ObservedModelAt: c.ObservedModelAt,
 		CloudflareCookieConfigured: c.EncryptedCloudflareCookie != "",
+		SSOConfigured:              c.Provider == accountdomain.ProviderBuild && c.EncryptedSSOToken != "",
 		BuildSuperEntitled:         c.BuildSuperEntitled && c.Provider == accountdomain.ProviderBuild,
 		BuildRouteMode:             string(buildRouteMode),
 		BuildBotFlagged:            value.BuildBotFlagged && c.Provider == accountdomain.ProviderBuild,

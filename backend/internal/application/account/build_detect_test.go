@@ -34,6 +34,16 @@ func (a detectResponsesAdapter) ForwardResponse(context.Context, provider.Respon
 	}, nil
 }
 
+func TestDetectBuildBotFlagsRequiresExplicitScope(t *testing.T) {
+	service := &Service{}
+	if _, _, err := service.DetectBuildBotFlagsWithProgress(context.Background(), nil, false, nil, nil); err == nil {
+		t.Fatal("missing all and ids should be rejected")
+	}
+	if _, _, err := service.DetectBuildBotFlagsWithProgress(context.Background(), []uint64{1}, true, nil, nil); err == nil {
+		t.Fatal("all and ids together should be rejected")
+	}
+}
+
 func TestDetectBuildAccountsRequiresExplicitScope(t *testing.T) {
 	service := &Service{}
 	if _, _, err := service.DetectBuildAccountsWithProgress(context.Background(), nil, false, nil, nil); err == nil {

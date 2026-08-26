@@ -33,13 +33,14 @@ func toAccountDomain(value accountModel) account.Credential {
 	var lastRefreshErrorResponse string
 	var refreshPermanent bool
 	var authType account.AuthType
-	var clientID, encryptedPrimary, encryptedRefresh, encryptedCloudflareCookie string
+	var clientID, encryptedPrimary, encryptedRefresh, encryptedCloudflareCookie, encryptedSSO string
 	if value.Credential != nil {
 		authType = account.AuthType(value.Credential.AuthType)
 		clientID = value.Credential.ClientID
 		encryptedPrimary = value.Credential.EncryptedPrimary
 		encryptedRefresh = value.Credential.EncryptedRefresh
 		encryptedCloudflareCookie = value.Credential.EncryptedCloudflareCookie
+		encryptedSSO = value.Credential.EncryptedSSO
 		// The account-level Cloudflare cookie is intentionally never exposed by
 		// the transport DTO; it is only used when constructing the upstream Cookie header.
 		if value.Credential.ExpiresAt != nil {
@@ -80,7 +81,7 @@ func toAccountDomain(value accountModel) account.Credential {
 	return account.Credential{
 		ID: value.ID, Provider: account.Provider(value.Provider), AuthType: authType, Name: value.Name, Email: value.Email,
 		UserID: value.UserID, TeamID: value.TeamID, SourceKey: value.SourceKey, OIDCClientID: clientID,
-		EncryptedAccessToken: encryptedPrimary, EncryptedRefreshToken: encryptedRefresh, EncryptedCloudflareCookie: encryptedCloudflareCookie,
+		EncryptedAccessToken: encryptedPrimary, EncryptedRefreshToken: encryptedRefresh, EncryptedCloudflareCookie: encryptedCloudflareCookie, EncryptedSSOToken: encryptedSSO,
 		ExpiresAt: expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: lastRefreshAt,
 		RefreshFailureCount: refreshFailures, RefreshUnclassifiedAuthCount: refreshUnclassifiedAuthFailures, LastRefreshErrorStatus: lastRefreshErrorStatus, LastRefreshErrorCode: lastRefreshError, LastRefreshErrorMessage: lastRefreshErrorMessage, LastRefreshErrorResponse: lastRefreshErrorResponse, RefreshPermanent: refreshPermanent,
 		Enabled: value.Enabled, AuthStatus: account.AuthStatus(value.AuthStatus), ReauthMarkedAt: value.ReauthMarkedAt, Priority: value.Priority,
@@ -92,6 +93,7 @@ func toAccountDomain(value accountModel) account.Credential {
 		BuildAPIFallback: value.BuildAPIFallback, BuildRouteMode: buildRouteMode,
 		BuildSuperEntitled: value.BuildSuperEntitled && account.Provider(value.Provider) == account.ProviderBuild,
 		BuildBotFlagSource: normalizedBuildBotFlagSource(account.Provider(value.Provider), value.Credential),
+		BuildBotFlagOrigin: normalizeBuildBotFlagOrigin(account.Provider(value.Provider), credentialOrigin(value.Credential)),
 		CreatedAt:          value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
 }
@@ -104,7 +106,7 @@ func toCredentialMaterialDomain(value accountCredentialModel, provider account.P
 	return account.CredentialMaterial{
 		AccountID: value.AccountID, Provider: provider, AuthType: account.AuthType(value.AuthType), OIDCClientID: value.ClientID,
 		EncryptedAccessToken: value.EncryptedPrimary, EncryptedRefreshToken: value.EncryptedRefresh,
-		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie, ExpiresAt: expiresAt,
+		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie, EncryptedSSOToken: value.EncryptedSSO, ExpiresAt: expiresAt,
 		RefreshDueAt: value.RefreshDueAt, LastRefreshAt: value.LastRefreshAt,
 		RefreshFailureCount: value.RefreshFailures, RefreshUnclassifiedAuthCount: value.RefreshUnclassifiedAuthFailures, LastRefreshErrorStatus: value.LastRefreshErrorStatus, LastRefreshErrorCode: value.LastRefreshError, LastRefreshErrorMessage: value.LastRefreshErrorMessage, LastRefreshErrorResponse: value.LastRefreshErrorResponse,
 		RefreshPermanent: value.RefreshPermanent, UpdatedAt: value.UpdatedAt,
@@ -169,10 +171,11 @@ func fromAccountCredentialDomain(value account.Credential) accountCredentialMode
 	return accountCredentialModel{
 		AccountID: value.ID, AuthType: string(authType), ClientID: value.OIDCClientID,
 		EncryptedPrimary: value.EncryptedAccessToken, EncryptedRefresh: value.EncryptedRefreshToken,
-		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie,
+		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie, EncryptedSSO: value.EncryptedSSOToken,
 		ExpiresAt:                 expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: value.LastRefreshAt,
 		RefreshFailures: value.RefreshFailureCount, RefreshUnclassifiedAuthFailures: value.RefreshUnclassifiedAuthCount, LastRefreshErrorStatus: value.LastRefreshErrorStatus, LastRefreshError: value.LastRefreshErrorCode, LastRefreshErrorMessage: value.LastRefreshErrorMessage, LastRefreshErrorResponse: value.LastRefreshErrorResponse, RefreshPermanent: value.RefreshPermanent,
 		BuildBotFlagSource: normalizeBuildBotFlagSource(value.Provider, value.BuildBotFlagSource),
+		BuildBotFlagOrigin: normalizeBuildBotFlagOrigin(value.Provider, value.BuildBotFlagOrigin),
 		UpdatedAt:          time.Now().UTC(),
 	}
 }
@@ -189,6 +192,25 @@ func normalizeBuildBotFlagSource(provider account.Provider, source int) int {
 		return source
 	}
 	return 0
+}
+
+func credentialOrigin(credential *accountCredentialModel) string {
+	if credential == nil {
+		return ""
+	}
+	return credential.BuildBotFlagOrigin
+}
+
+func normalizeBuildBotFlagOrigin(provider account.Provider, origin string) string {
+	if provider != account.ProviderBuild {
+		return ""
+	}
+	switch origin {
+	case account.BuildBotFlagOriginJWT, account.BuildBotFlagOriginPage:
+		return origin
+	default:
+		return ""
+	}
 }
 
 func fromWebProfileDomain(value account.Credential) *webAccountProfileModel {
@@ -266,7 +288,7 @@ func toAuditDomain(value requestAuditModel) audit.Record {
 		StatusCode: value.StatusCode, Streaming: value.Streaming,
 		MediaInputImages: value.MediaInputImages, MediaOutputImages: value.MediaOutputImages, MediaOutputSeconds: value.MediaOutputSeconds,
 		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens, OutputTokens: value.OutputTokens,
-		ReasoningTokens: value.ReasoningTokens, TotalTokens: value.TotalTokens, CostInUSDTicks: value.CostInUSDTicks,
+		ReasoningTokens: value.ReasoningTokens, StreamedThinking: value.StreamedThinking, TotalTokens: value.TotalTokens, CostInUSDTicks: value.CostInUSDTicks,
 		EstimatedCostInUSDTicks: value.EstimatedCostInUSDTicks, PricingModel: value.PricingModel, PricingVersion: value.PricingVersion,
 		NumSourcesUsed: value.NumSourcesUsed, NumServerSideToolsUsed: value.NumServerSideToolsUsed,
 		ContextInputTokens: value.ContextInputTokens, ContextOutputTokens: value.ContextOutputTokens, FirstTokenMS: value.FirstTokenMS, DurationMS: value.DurationMS,

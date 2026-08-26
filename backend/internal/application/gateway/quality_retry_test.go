@@ -40,8 +40,8 @@ func TestClassifyQualityHold(t *testing.T) {
 		{name: "short no think delivers", sig: QualityStreamSignals{VisibleTokens: 10, Terminal: true}, want: QualityDeliver},
 		{name: "empty terminal waits for transport handling", sig: QualityStreamSignals{Terminal: true}, want: QualityWait},
 		{name: "midstream enough content withhold", sig: QualityStreamSignals{VisibleTokens: 64}, want: QualityWithhold},
-		{name: "stub midstream waits even with enough visible", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64}, want: QualityWait},
-		{name: "stub hold expiry is inconclusive and delivers", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64, HoldExpired: true}, want: QualityDeliver},
+		{name: "stub midstream enough withholds", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64}, want: QualityWithhold},
+		{name: "stub hold expiry with visible withholds", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64, HoldExpired: true}, want: QualityWithhold},
 		{name: "stub-only hold expiry keeps waiting", sig: QualityStreamSignals{ReasoningStarted: true, HoldExpired: true}, want: QualityWait},
 		{name: "stub terminal enough withhold", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64, Terminal: true}, want: QualityWithhold},
 		{name: "wait for more", sig: QualityStreamSignals{VisibleTokens: 8}, want: QualityWait},
@@ -218,6 +218,46 @@ func sse(frames ...string) string {
 	return b.String()
 }
 
+func TestObserveQualityChunkCPAMortarVsHollerChat(t *testing.T) {
+	t.Parallel()
+	mortar := qualityScanState{protocol: qualityProtocolChat}
+	ObserveQualityChunk(&mortar, []byte(sse(
+		`data: {"choices":[{"delta":{"role":"assistant"}}]}`,
+		`data: {"choices":[{"delta":{"content":"`+strings.Repeat("word ", 40)+`"}}]}`,
+		`data: {"usage":{"completion_tokens":1101,"completion_tokens_details":{"reasoning_tokens":1018}}}`,
+		"data: [DONE]",
+	)))
+	mortarSig := mortar.signals()
+	if mortarSig.HasThinking {
+		t.Fatalf("mortar chat must not count usage as thinking: %#v", mortarSig)
+	}
+	if ClassifyQualityHold(mortarSig, 32) != QualityWithhold {
+		t.Fatalf("mortar chat should withhold, got %s (%#v)", ClassifyQualityHold(mortarSig, 32), mortarSig)
+	}
+	if mortar.peekUsage().StreamedThinking {
+		t.Fatal("mortar usage must not set StreamedThinking from reasoning_tokens")
+	}
+
+	holler := qualityScanState{protocol: qualityProtocolChat}
+	ObserveQualityChunk(&holler, []byte(sse(
+		`data: {"choices":[{"delta":{"role":"assistant"}}]}`,
+		`data: {"choices":[{"delta":{"reasoning_content":"The question asks for the knowledge cutoff."}}]}`,
+		`data: {"choices":[{"delta":{"content":"2025"}}]}`,
+		`data: {"usage":{"completion_tokens":1359,"completion_tokens_details":{"reasoning_tokens":1281}}}`,
+		"data: [DONE]",
+	)))
+	hollerSig := holler.signals()
+	if !hollerSig.HasThinking {
+		t.Fatalf("holler chat must count reasoning_content: %#v", hollerSig)
+	}
+	if ClassifyQualityHold(hollerSig, 32) != QualityDeliver {
+		t.Fatalf("holler chat should deliver, got %s (%#v)", ClassifyQualityHold(hollerSig, 32), hollerSig)
+	}
+	if !holler.peekUsage().StreamedThinking {
+		t.Fatal("holler usage must set StreamedThinking from reasoning_content")
+	}
+}
+
 func TestObserveQualityChunkThinkingChat(t *testing.T) {
 	t.Parallel()
 	state := qualityScanState{protocol: qualityProtocolChat}
@@ -316,11 +356,11 @@ func TestObserveQualityConvertedEncryptedThinking(t *testing.T) {
 			state := qualityScanState{protocol: test.protocol}
 			ObserveQualityChunk(&state, converted)
 			sig := state.signals()
-			if !sig.HasThinking {
-				t.Fatalf("converted encrypted thinking evidence was lost:\n%s", converted)
+			if sig.HasThinking {
+				t.Fatalf("encrypted-only thinking must not count as streamed thinking:\n%s", converted)
 			}
-			if got := ClassifyQualityHold(sig, 32); got != QualityDeliver {
-				t.Fatalf("converted encrypted thinking verdict = %s (%#v)", got, sig)
+			if got := ClassifyQualityHold(sig, 32); got != QualityWithhold {
+				t.Fatalf("encrypted-only thinking verdict = %s (%#v)", got, sig)
 			}
 		})
 	}
@@ -354,8 +394,8 @@ func TestObserveQualityChunkAnthropicSignatureIsThinking(t *testing.T) {
 	ObserveQualityChunk(&state, []byte(sse(
 		`data: {"type":"content_block_delta","delta":{"type":"signature_delta","signature":"gAAAA-cipher"}}`,
 	)))
-	if sig := state.signals(); !sig.HasThinking || !sig.ReasoningStarted {
-		t.Fatalf("non-empty Anthropic signature must count as encrypted thinking: %#v", sig)
+	if sig := state.signals(); sig.HasThinking || !sig.ReasoningStarted {
+		t.Fatalf("Anthropic signature is encrypted-only, not streamed thinking: %#v", sig)
 	}
 }
 
@@ -396,15 +436,15 @@ func TestObserveQualityChunkResponsesReasoningItem(t *testing.T) {
 	ObserveQualityChunk(&encrypted, []byte(sse(
 		`data: {"type":"response.output_item.added","item":{"id":"rs_1","type":"reasoning"}}`,
 		`data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","encrypted_content":"gAAAA-cipher"}}`,
-		`data: {"type":"response.output_text.delta","delta":"hello hello hello hello hello hello hello hello"}`,
+		`data: {"type":"response.output_text.delta","delta":"`+strings.Repeat("hello ", 40)+`"}`,
 		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"output_tokens":90,"output_tokens_details":{"reasoning_tokens":60}}}}`,
 	)))
 	encSig := encrypted.signals()
-	if !encSig.HasThinking || encSig.ReasoningTokens != 60 {
-		t.Fatalf("encrypted reasoning item must count as thinking: %#v", encSig)
+	if encSig.HasThinking || encSig.ReasoningTokens != 60 {
+		t.Fatalf("encrypted-only reasoning must not count as streamed thinking: %#v", encSig)
 	}
-	if ClassifyQualityHold(encSig, 32) != QualityDeliver {
-		t.Fatalf("encrypted thinking should deliver: %#v", encSig)
+	if ClassifyQualityHold(encSig, 32) != QualityWithhold {
+		t.Fatalf("encrypted-only reasoning must withhold: %#v", encSig)
 	}
 }
 
@@ -438,8 +478,8 @@ func TestObserveQualityChunkEmptyReasoningStubIsNotThinking(t *testing.T) {
 	if midSig.HasThinking || !midSig.ReasoningStarted || midSig.Terminal {
 		t.Fatalf("midstream stub signals = %#v", midSig)
 	}
-	if ClassifyQualityHold(midSig, 32) != QualityWait {
-		t.Fatalf("midstream stub must wait for usage, got %s (%#v)", ClassifyQualityHold(midSig, 32), midSig)
+	if ClassifyQualityHold(midSig, 32) != QualityWithhold {
+		t.Fatalf("midstream stub with enough visible must withhold, got %s (%#v)", ClassifyQualityHold(midSig, 32), midSig)
 	}
 
 	responses := qualityScanState{protocol: qualityProtocolResponses}
@@ -464,13 +504,16 @@ func TestPeekQualityStreamThinkingDeliversRemainder(t *testing.T) {
 		`data: {"choices":[{"delta":{"content":"answer after think"}}]}`,
 		"data: [DONE]",
 	)))
-	replay, verdict, _, _, err := peekQualityStream(context.Background(), body, qualityProtocolChat, QualityRetryRuntime{MinOutputTokens: 32, HoldTimeout: time.Second})
+	replay, verdict, usage, _, err := peekQualityStream(context.Background(), body, qualityProtocolChat, QualityRetryRuntime{MinOutputTokens: 32, HoldTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer replay.Close()
 	if verdict != QualityDeliver {
 		t.Fatalf("verdict=%s", verdict)
+	}
+	if !usage.StreamedThinking {
+		t.Fatalf("visible thinking_content must set StreamedThinking: %#v", usage)
 	}
 	got, _ := io.ReadAll(replay)
 	if !strings.Contains(string(got), "answer after think") || !strings.Contains(string(got), "thinking_content") {
@@ -608,7 +651,7 @@ func TestPeekQualityStreamHoldTimeoutInterruptsBlockedReadAndPreservesRemainder(
 	}
 }
 
-func TestPeekQualityStreamHoldTimeoutDeliversStartedReasoningAndPreservesLateEvidence(t *testing.T) {
+func TestPeekQualityStreamWithholdsStartedReasoningAndPreservesLateEvidence(t *testing.T) {
 	t.Parallel()
 	reader, writer := io.Pipe()
 	content := strings.Repeat("abcd", 40)
@@ -639,19 +682,22 @@ func TestPeekQualityStreamHoldTimeoutDeliversStartedReasoningAndPreservesLateEvi
 	}()
 
 	started := time.Now()
-	replay, verdict, _, _, err := peekQualityStream(context.Background(), reader, qualityProtocolResponses, QualityRetryRuntime{
+	replay, verdict, usage, _, err := peekQualityStream(context.Background(), reader, qualityProtocolResponses, QualityRetryRuntime{
 		MinOutputTokens: 8,
-		HoldTimeout:     30 * time.Millisecond,
+		HoldTimeout:     time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer replay.Close()
-	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed > 200*time.Millisecond {
-		t.Fatalf("peek returned after %s, want the 30ms hold timeout", elapsed)
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("peek returned after %s, want immediate withhold without waiting for hold timeout", elapsed)
 	}
-	if verdict != QualityDeliver {
-		t.Fatalf("started reasoning at hold timeout verdict = %s, want deliver", verdict)
+	if verdict != QualityWithhold {
+		t.Fatalf("stub + enough visible verdict = %s, want withhold", verdict)
+	}
+	if usage.StreamedThinking {
+		t.Fatalf("encrypted/stub reasoning must not set StreamedThinking: %#v", usage)
 	}
 	close(continueWrite)
 	body, err := io.ReadAll(replay)

@@ -152,6 +152,9 @@ type Usage struct {
 	ContextInputTokens     int64
 	ContextOutputTokens    int64
 	ResponseModel          string
+	// StreamedThinking is true only when the hold scanner saw client-visible
+	// thinking text. Usage.reasoning_tokens must not set this.
+	StreamedThinking bool
 }
 
 type Result struct {
@@ -1038,16 +1041,37 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	holdCfg := s.qualityRetryConfig()
 	officialQualityRetry := holdCfg.Enabled
 	anti := s.antiDegradeCtl()
+	stickyOwnership := ownership
 	if anti != nil && anti.Enforce() {
 		holdCfg.Enabled = true
-		holdCfg.MaxAttempts = anti.MaxIPRetries()
 		if minOutput := anti.ThinkingMinOutput(); minOutput > 0 {
 			holdCfg.MinOutputTokens = minOutput
+		}
+		if ownership != nil && anti.AccountQuarantined(ownership.AccountID) {
+			s.logger.Info("antidegrade_break_sticky", "request_id", input.RequestID, "account_id", ownership.AccountID, "reason", "quarantined")
+			stickyOwnership = nil
+			attemptPolicy = newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), input.ForcedAccountID != 0)
 		}
 	}
 	qualityHoldEnabled := shouldHoldQualityStream(input, ownership, route, operation, holdCfg)
 	var attemptEgressNodeID uint64
 	var antiDegradePin uint64
+	noteAntiMiss := func(credential accountdomain.Credential, usedNode uint64) {
+		if anti == nil || !anti.Enforce() {
+			return
+		}
+		anti.OnMissingThinking(ctx, credential, usedNode, anti.ExitIP(ctx, usedNode))
+		if !anti.AccountQuarantined(credential.ID) {
+			antiDegradePin = credential.ID
+			return
+		}
+		antiDegradePin = 0
+		if stickyOwnership != nil && stickyOwnership.AccountID == credential.ID {
+			stickyOwnership = nil
+			attemptPolicy = newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), input.ForcedAccountID != 0)
+		}
+		s.logger.Info("antidegrade_account_quarantined", "request_id", input.RequestID, "account_id", credential.ID)
+	}
 	// Count accounts that actually reached the upstream. Credential-only skips
 	// do not consume the quality retry budget; refreshes stay on the same account.
 	qualityAccountAttempts := 0
@@ -1108,6 +1132,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				record.CachedInputTokens = usage.CachedInputTokens
 				record.OutputTokens = usage.OutputTokens
 				record.ReasoningTokens = usage.ReasoningTokens
+				record.StreamedThinking = usage.StreamedThinking
 				record.TotalTokens = usage.TotalTokens
 				record.CostInUSDTicks = usage.CostInUSDTicks
 				imagePricing, imagePriced := audit.EstimateOfficialImageCost(pricingModel, "", "", response.QuotaUnits)
@@ -1256,8 +1281,8 @@ attemptLoop:
 					err = &SelectionUnavailableError{Reason: SelectionNoAccounts}
 				}
 			}
-		} else if ownership != nil {
-			lease, err = s.selector.AcquirePinnedForKey(ctx, route.Provider, ownership.AccountID, route.ID, route.UpstreamModel, quotaMode, true, accountScope)
+		} else if stickyOwnership != nil {
+			lease, err = s.selector.AcquirePinnedForKey(ctx, route.Provider, stickyOwnership.AccountID, route.ID, route.UpstreamModel, quotaMode, true, accountScope)
 		} else if antiDegradePin != 0 {
 			lease, err = s.selector.AcquirePinnedForKey(ctx, route.Provider, antiDegradePin, route.ID, route.UpstreamModel, quotaMode, true, accountScope)
 		} else if input.ForcedEgressNodeID != 0 {
@@ -1280,14 +1305,33 @@ attemptLoop:
 		excluded[lease.Credential.ID] = true
 		attemptEgressNodeID = 0
 		if anti != nil && anti.Enforce() && input.ForcedAccountID == 0 {
+			if anti.AccountQuarantined(lease.Credential.ID) {
+				lease.Release()
+				antiDegradePin = 0
+				if stickyOwnership != nil && stickyOwnership.AccountID == lease.Credential.ID {
+					stickyOwnership = nil
+					attemptPolicy = newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), input.ForcedAccountID != 0)
+				}
+				s.logger.Info("antidegrade_skip_quarantined", "request_id", input.RequestID, "account_id", lease.Credential.ID)
+				continue
+			}
 			picked, admitErr := anti.Admit(ctx, lease.Credential, excludedEgressNodes)
 			if admitErr != nil {
 				lease.Release()
 				lastErr = admitErr
+				public := "没有可用的干净出口 IP"
+				if errors.Is(admitErr, antidegrade.ErrAccountQuarantined) {
+					public = "账号因缺少推理被隔离"
+				}
 				lastFailure = &UpstreamFailure{
 					HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
-					PublicMessage: "没有可用的干净出口 IP", AccountID: lease.Credential.ID, AccountName: lease.Credential.Name,
+					PublicMessage: public, AccountID: lease.Credential.ID, AccountName: lease.Credential.Name,
 					Cause: admitErr,
+				}
+				antiDegradePin = 0
+				if errors.Is(admitErr, antidegrade.ErrNoEligibleExitIP) || errors.Is(admitErr, antidegrade.ErrAccountQuarantined) {
+					s.logger.Info("antidegrade_admit_failover", "request_id", input.RequestID, "account_id", lease.Credential.ID, "error", admitErr)
+					continue
 				}
 				break attemptLoop
 			}
@@ -1622,9 +1666,8 @@ attemptLoop:
 						} else if anti != nil && anti.Enforce() {
 							usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 							excludedEgressNodes[usedNode] = true
-							anti.OnMissingThinking(ctx, credential, usedNode, anti.ExitIP(ctx, usedNode))
-							antiDegradePin = credential.ID
-							s.logger.Warn(logPrefix+"_ip_retry", "request_id", input.RequestID, "account_id", credential.ID, "node_id", usedNode)
+							noteAntiMiss(credential, usedNode)
+							s.logger.Warn(logPrefix+"_ip_retry", "request_id", input.RequestID, "account_id", credential.ID, "node_id", usedNode, "quarantined", anti.AccountQuarantined(credential.ID))
 						}
 					}
 					if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
@@ -1633,19 +1676,26 @@ attemptLoop:
 					continue
 				}
 				response.Body = replay
+				if verdict == QualityWithhold && anti != nil && anti.Enforce() {
+					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
+					excludedEgressNodes[usedNode] = true
+					noteAntiMiss(credential, usedNode)
+				}
 				hasNextAccount := qualityAccountAttempts < holdCfg.MaxAttempts
-				if anti == nil || !anti.Enforce() {
-					hasNextAccount = hasNextAccount && attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)
+				if anti != nil && anti.Enforce() && antiDegradePin != 0 {
+					// Same-account ExitIP retry is still in progress.
+				} else {
+					hasNextAccount = hasNextAccount && attemptPolicy.hasNext(attempt)
+					if selection != nil {
+						hasNextAccount = hasNextAccount && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)
+					}
 				}
 				commit := CommitQualityHold(verdict, qualityAccountAttempts-1, holdCfg.MaxAttempts, hasNextAccount, holdCfg.OnExhausted)
 				if verdict == QualityWithhold {
-					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
-					if anti != nil && anti.Enforce() {
-						excludedEgressNodes[usedNode] = true
-						anti.OnMissingThinking(ctx, credential, usedNode, anti.ExitIP(ctx, usedNode))
-						antiDegradePin = credential.ID
-					} else if officialQualityRetry {
-						s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, holdCfg.AccountCooldown)
+					if anti == nil || !anti.Enforce() {
+						if officialQualityRetry {
+							s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, holdCfg.AccountCooldown)
+						}
 					}
 				} else if verdict == QualityDeliver && anti != nil && anti.Enabled() {
 					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)

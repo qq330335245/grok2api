@@ -2,6 +2,7 @@ package antidegrade
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -56,13 +57,71 @@ func TestMissingThinkingBansOnlyOnBotFlagTwoAfterDistinctIPs(t *testing.T) {
 	}
 }
 
-func TestMissingThinkingDoesNotBanCleanBotFlag(t *testing.T) {
+func TestMissingThinkingDoesNotBanUnclassifiedAccount(t *testing.T) {
 	bans := &banRecorder{}
 	controller := New(Config{Enabled: true, Mode: ModeEnforce, AccountIPFailThreshold: 2, StateFile: t.TempDir() + "/l.json"}, nil, bans, nil)
 	cred := accountdomain.Credential{ID: 8, BuildBotFlagSource: 0}
 	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
 	controller.OnMissingThinking(context.Background(), cred, 2, "10.0.0.2")
 	if len(bans.ids) != 0 {
-		t.Fatalf("banned clean account: %v", bans.ids)
+		t.Fatalf("banned unclassified account: %v", bans.ids)
+	}
+	if !controller.AccountQuarantined(8) {
+		t.Fatal("unclassified account must still be quarantined after K IPs")
+	}
+}
+
+func TestMissingThinkingQuarantinesAndKeepsFirstIPCool(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	nodes := staticNodes{
+		{ID: 1, Enabled: true, ExitIP: "10.0.0.1"},
+		{ID: 2, Enabled: true, ExitIP: "10.0.0.2"},
+	}
+	controller := New(Config{
+		Enabled: true, Mode: ModeEnforce, AccountIPFailThreshold: 2,
+		DirtyIPCooldown: 30 * time.Minute, AccountQuarantineTTL: 2 * time.Hour,
+		StateFile: t.TempDir() + "/l.json",
+	}, nodes, nil, nil)
+	controller.ledger.now = func() time.Time { return now }
+	cred := accountdomain.Credential{ID: 7, EgressNodeID: 1}
+	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
+	if controller.AccountQuarantined(7) {
+		t.Fatal("must not quarantine on first IP")
+	}
+	controller.OnMissingThinking(context.Background(), cred, 2, "10.0.0.2")
+	if !controller.AccountQuarantined(7) {
+		t.Fatal("expected quarantine after K IPs")
+	}
+	controller.ledger.mu.Lock()
+	firstCool := controller.ledger.cooling(controller.ledger.ip("10.0.0.1"), now)
+	secondCool := controller.ledger.cooling(controller.ledger.ip("10.0.0.2"), now)
+	controller.ledger.mu.Unlock()
+	if !firstCool {
+		t.Fatal("first failed IP must stay cooled")
+	}
+	if secondCool {
+		t.Fatal("later failed IPs must be lifted after account quarantine")
+	}
+	if _, err := controller.Admit(context.Background(), cred, nil); !errors.Is(err, ErrAccountQuarantined) {
+		t.Fatalf("admit quarantined account err=%v", err)
+	}
+	other := accountdomain.Credential{ID: 9, EgressNodeID: 2}
+	got, err := controller.Admit(context.Background(), other, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("other account should keep healthy binding, override=%d", got)
+	}
+	controller.OnMissingThinking(context.Background(), cred, 2, "10.0.0.2")
+	controller.ledger.mu.Lock()
+	if controller.ledger.cooling(controller.ledger.ip("10.0.0.2"), now) {
+		controller.ledger.mu.Unlock()
+		t.Fatal("already-quarantined account must not cool more IPs")
+	}
+	controller.ledger.mu.Unlock()
+	controller.ClearAccount(context.Background(), 7)
+	if controller.AccountQuarantined(7) {
+		t.Fatal("clear-cooldown must lift quarantine")
 	}
 }
