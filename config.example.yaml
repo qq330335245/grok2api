@@ -180,6 +180,10 @@ qualityGuard:
   antiDegrade:
     enabled: false
     mode: enforce # observe | enforce
+    # Channel allowlist. Default (empty) is grok_build only. Add grok_console
+    # / grok_web later to hold and quarantine those channels too.
+    providers:
+      - grok_build
     thinkingMinOutput: 32
     densityWindow: 15m
     densityMaxAccounts: 5

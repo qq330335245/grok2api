@@ -8,7 +8,6 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/application/antidegrade"
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
-	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
@@ -17,6 +16,7 @@ func antiDegradeRuntime(value config.AntiDegradeConfig) antidegrade.Config {
 	return antidegrade.Config{
 		Enabled:                value.Enabled,
 		Mode:                   value.Mode,
+		Providers:              append([]string(nil), value.Providers...),
 		ThinkingMinOutput:      int64(value.ThinkingMinOutput),
 		DensityWindow:          value.DensityWindow.Value(),
 		DensityMaxAccounts:     value.DensityMaxAccounts,
@@ -37,14 +37,14 @@ type antiDegradeNodes struct {
 }
 
 func (n antiDegradeNodes) ListBuildNodes(ctx context.Context) ([]antidegrade.Node, error) {
-	values, err := n.svc.ListAll(ctx, egressdomain.ScopeBuild, repository.SortQuery{})
+	values, err := n.svc.ListAll(ctx, "", repository.SortQuery{})
 	if err != nil {
 		return nil, err
 	}
 	result := make([]antidegrade.Node, 0, len(values))
 	for _, value := range values {
 		result = append(result, antidegrade.Node{
-			ID: value.ID, Enabled: value.Enabled, ExitIP: value.ExitIP, Name: value.Name,
+			ID: value.ID, Enabled: value.Enabled, ExitIP: value.ExitIP, Name: value.Name, Scope: string(value.Scope),
 		})
 	}
 	return result, nil

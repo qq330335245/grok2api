@@ -124,6 +124,20 @@ func TestMissingThinkingQuarantinesAndKeepsFirstIPCool(t *testing.T) {
 	if controller.AccountQuarantined(7) {
 		t.Fatal("clear-cooldown must lift quarantine")
 	}
+	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
+	if controller.AccountQuarantined(7) {
+		t.Fatal("clearing quarantine must reset fail-exit count")
+	}
+}
+
+func TestExitIPRemembersLastProbeWhenNodeIPEmpty(t *testing.T) {
+	nodes := staticNodes{{ID: 9, Enabled: true, ExitIP: "51.75.118.79"}}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	controller.OnMissingThinking(context.Background(), accountdomain.Credential{ID: 7}, 9, controller.ExitIP(context.Background(), 9))
+	controller.nodes = staticNodes{{ID: 9, Enabled: true, ExitIP: ""}}
+	if got := controller.ExitIP(context.Background(), 9); got != "51.75.118.79" {
+		t.Fatalf("ExitIP=%q, want remembered 51.75.118.79", got)
+	}
 }
 
 func TestSnapshotShowsWindowLoadAndClearIP(t *testing.T) {
@@ -153,5 +167,69 @@ func TestSnapshotShowsWindowLoadAndClearIP(t *testing.T) {
 	snapshot = controller.Snapshot(context.Background())
 	if snapshot.IPs[0].Cooling {
 		t.Fatal("cleared IP should not be cooling")
+	}
+}
+
+func TestExitIPResolvesConsoleNodeAndRekeysPlaceholder(t *testing.T) {
+	nodes := staticNodes{
+		{ID: 3, Enabled: true, ExitIP: "104.28.215.68", Name: "console 001", Scope: "grok_console"},
+		{ID: 7, Enabled: true, ExitIP: "147.135.213.131", Name: "katabump 001", Scope: "grok_build"},
+	}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	controller.OnSuccess(53, 3, "node:3")
+	if got := controller.ExitIP(context.Background(), 3); got != "104.28.215.68" {
+		t.Fatalf("ExitIP=%q", got)
+	}
+	snapshot := controller.Snapshot(context.Background())
+	if len(snapshot.IPs) != 1 || snapshot.IPs[0].ExitIP != "104.28.215.68" {
+		t.Fatalf("ips=%#v", snapshot.IPs)
+	}
+	if len(snapshot.IPs[0].NodeNames) != 1 || snapshot.IPs[0].NodeNames[0] != "console 001" {
+		t.Fatalf("names=%v", snapshot.IPs[0].NodeNames)
+	}
+	controller.ledger.mu.Lock()
+	_, placeholder := controller.ledger.state.IPs["node:3"]
+	controller.ledger.mu.Unlock()
+	if placeholder {
+		t.Fatal("placeholder node:3 should be merged into the real ExitIP")
+	}
+}
+
+func TestAppliesToDefaultsToBuildOnly(t *testing.T) {
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, StateFile: t.TempDir() + "/l.json"}, nil, nil, nil)
+	if !controller.AppliesTo(accountdomain.ProviderBuild) || !controller.ActiveFor(accountdomain.ProviderBuild) {
+		t.Fatal("build must be in the default allowlist")
+	}
+	if controller.AppliesTo(accountdomain.ProviderConsole) || controller.ActiveFor(accountdomain.ProviderConsole) {
+		t.Fatal("console must be ignored until opted in")
+	}
+	controller.OnMissingThinking(context.Background(), accountdomain.Credential{ID: 53, Provider: accountdomain.ProviderConsole}, 3, "104.28.215.68")
+	if controller.AccountQuarantined(53) {
+		t.Fatal("console missing-thinking must not quarantine")
+	}
+	controller.ledger.mu.Lock()
+	_, recorded := controller.ledger.state.IPs["104.28.215.68"]
+	controller.ledger.mu.Unlock()
+	if recorded {
+		t.Fatal("console missing-thinking must not write the ExitIP ledger")
+	}
+	controller.Update(Config{Enabled: true, Mode: ModeEnforce, Providers: []string{"grok_build", "grok_console"}, StateFile: controller.config().StateFile})
+	if !controller.ActiveFor(accountdomain.ProviderConsole) {
+		t.Fatal("opting in grok_console must activate the channel")
+	}
+}
+
+func TestAdmitKeepsBuildRetryOnBuildNodes(t *testing.T) {
+	nodes := staticNodes{
+		{ID: 3, Enabled: true, ExitIP: "104.28.215.68", Name: "console 001", Scope: "grok_console"},
+		{ID: 7, Enabled: true, ExitIP: "147.135.213.131", Name: "katabump 001", Scope: "grok_build"},
+	}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, DensityMaxAccounts: 5, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	picked, err := controller.Admit(context.Background(), accountdomain.Credential{ID: 48, Provider: accountdomain.ProviderBuild}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if picked != 7 {
+		t.Fatalf("picked=%d, want build node 7", picked)
 	}
 }

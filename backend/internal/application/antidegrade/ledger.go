@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -296,7 +298,136 @@ func (l *ledger) clearAccountQuarantine(accountID uint64) {
 	}
 	current.QuarantineUntil = time.Time{}
 	current.QuarantineReason = ""
+	current.IPs = nil
 	l.state.Accounts[accountID] = current
+	l.dirty = true
+}
+
+func parseNodeKey(key string) (uint64, bool) {
+	key = strings.TrimSpace(key)
+	if !strings.HasPrefix(key, "node:") {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(strings.TrimPrefix(key, "node:"), 10, 64)
+	return id, err == nil && id != 0
+}
+
+func (l *ledger) lastIPForNode(nodeID uint64) string {
+	if nodeID == 0 {
+		return ""
+	}
+	for _, key := range sortedKeys(l.state.IPs) {
+		if strings.HasPrefix(key, "node:") {
+			continue
+		}
+		state := l.state.IPs[key]
+		if state == nil {
+			continue
+		}
+		for _, id := range state.NodeIDs {
+			if id != nodeID {
+				continue
+			}
+			if ip := strings.TrimSpace(state.ExitIP); ip != "" && !strings.HasPrefix(ip, "node:") {
+				return ip
+			}
+			if !strings.HasPrefix(key, "node:") {
+				return key
+			}
+		}
+	}
+	return ""
+}
+
+func (l *ledger) rekeyFromNodes(nodes []Node) {
+	byID := make(map[uint64]Node, len(nodes))
+	for _, node := range nodes {
+		if node.ID != 0 {
+			byID[node.ID] = node
+		}
+	}
+	for _, key := range sortedKeys(l.state.IPs) {
+		state := l.state.IPs[key]
+		if state == nil {
+			continue
+		}
+		ids := append([]uint64(nil), state.NodeIDs...)
+		if id, ok := parseNodeKey(key); ok {
+			ids = append(ids, id)
+		}
+		for _, id := range ids {
+			node, ok := byID[id]
+			if !ok {
+				continue
+			}
+			ip := strings.TrimSpace(node.ExitIP)
+			if ip == "" || strings.HasPrefix(ip, "node:") || ip == key {
+				continue
+			}
+			l.mergeIP(key, ip, id)
+			break
+		}
+	}
+}
+
+func (l *ledger) mergeIP(from, to string, nodeID uint64) {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || to == "" || from == to {
+		return
+	}
+	src := l.state.IPs[from]
+	if src == nil {
+		l.rememberNode(to, nodeID)
+		return
+	}
+	dst := l.ip(to)
+	for _, id := range src.NodeIDs {
+		already := false
+		for _, existing := range dst.NodeIDs {
+			if existing == id {
+				already = true
+				break
+			}
+		}
+		if !already {
+			dst.NodeIDs = append(dst.NodeIDs, id)
+		}
+	}
+	if nodeID != 0 {
+		already := false
+		for _, existing := range dst.NodeIDs {
+			if existing == nodeID {
+				already = true
+				break
+			}
+		}
+		if !already {
+			dst.NodeIDs = append(dst.NodeIDs, nodeID)
+		}
+	}
+	dst.Window = append(dst.Window, src.Window...)
+	dst.Events = append(dst.Events, src.Events...)
+	if src.CooldownUntil.After(dst.CooldownUntil) {
+		dst.CooldownUntil = src.CooldownUntil
+		dst.CooldownReason = src.CooldownReason
+	}
+	if src.OperatorOverrideUntil.After(dst.OperatorOverrideUntil) {
+		dst.OperatorOverrideUntil = src.OperatorOverrideUntil
+	}
+	delete(l.state.IPs, from)
+	for id, acc := range l.state.Accounts {
+		changed := false
+		for i, item := range acc.IPs {
+			if item.ExitIP == from {
+				acc.IPs[i].ExitIP = to
+				changed = true
+			}
+		}
+		if changed {
+			l.state.Accounts[id] = acc
+		}
+	}
 	l.dirty = true
 }
 

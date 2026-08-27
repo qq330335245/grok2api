@@ -1,6 +1,11 @@
 package antidegrade
 
-import "time"
+import (
+	"strings"
+	"time"
+
+	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+)
 
 const (
 	ModeObserve = "observe"
@@ -9,8 +14,11 @@ const (
 
 // Config is the in-process ExitIP anti-degrade policy.
 type Config struct {
-	Enabled                bool
-	Mode                   string
+	Enabled bool
+	Mode    string
+	// Providers is the channel allowlist. Empty normalizes to grok_build so
+	// Console/Web are not held or quarantined until explicitly opted in.
+	Providers              []string
 	ThinkingMinOutput      int64
 	DensityWindow          time.Duration
 	DensityMaxAccounts     int
@@ -29,6 +37,7 @@ func (c Config) Normalize() Config {
 	if c.Mode != ModeObserve {
 		c.Mode = ModeEnforce
 	}
+	c.Providers = normalizeProviders(c.Providers)
 	if c.ThinkingMinOutput <= 0 {
 		c.ThinkingMinOutput = 32
 	}
@@ -76,4 +85,43 @@ func (c Config) Normalize() Config {
 
 func (c Config) Enforce() bool {
 	return c.Enabled && c.Mode == ModeEnforce
+}
+
+func (c Config) AppliesTo(provider accountdomain.Provider) bool {
+	want := strings.TrimSpace(string(provider))
+	if want == "" {
+		want = string(accountdomain.ProviderBuild)
+	}
+	for _, item := range c.Normalize().Providers {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+var allowedAntiDegradeProviders = map[string]struct{}{
+	string(accountdomain.ProviderBuild):   {},
+	string(accountdomain.ProviderConsole): {},
+	string(accountdomain.ProviderWeb):     {},
+}
+
+func normalizeProviders(values []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		item := strings.ToLower(strings.TrimSpace(value))
+		if _, ok := allowedAntiDegradeProviders[item]; !ok {
+			continue
+		}
+		if _, dup := seen[item]; dup {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	if len(result) == 0 {
+		return []string{string(accountdomain.ProviderBuild)}
+	}
+	return result
 }

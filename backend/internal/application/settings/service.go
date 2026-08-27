@@ -175,6 +175,7 @@ type EditableConfig struct {
 type AntiDegradeConfig struct {
 	Enabled                bool
 	Mode                   string
+	Providers              []string
 	ThinkingMinOutput      int
 	DensityWindow          string
 	DensityMaxAccounts     int
@@ -464,7 +465,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	base.Accounts.ExcludeBuildBotFlaggedFromScheduling = value.Accounts.ExcludeBuildBotFlaggedFromScheduling
 	if value.AntiDegrade != nil {
 		base.QualityGuard.AntiDegrade = config.AntiDegradeConfig{
-			Enabled: value.AntiDegrade.Enabled, Mode: value.AntiDegrade.Mode,
+			Enabled: value.AntiDegrade.Enabled, Mode: value.AntiDegrade.Mode, Providers: append([]string(nil), value.AntiDegrade.Providers...),
 			ThinkingMinOutput: value.AntiDegrade.ThinkingMinOutput, DensityWindow: config.Duration(value.AntiDegrade.DensityWindow),
 			DensityMaxAccounts: value.AntiDegrade.DensityMaxAccounts, DirtyIPCooldown: config.Duration(value.AntiDegrade.DirtyIPCooldown),
 			FarmIPCooldown: config.Duration(value.AntiDegrade.FarmIPCooldown), MaxIPRetries: value.AntiDegrade.MaxIPRetries,
@@ -550,7 +551,8 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 
 func toDomainAntiDegrade(value config.AntiDegradeConfig) *settingsdomain.AntiDegradeConfig {
 	return &settingsdomain.AntiDegradeConfig{
-		Enabled: value.Enabled, Mode: value.Mode, ThinkingMinOutput: value.ThinkingMinOutput,
+		Enabled: value.Enabled, Mode: value.Mode, Providers: append([]string(nil), value.Providers...),
+		ThinkingMinOutput: value.ThinkingMinOutput,
 		DensityWindow: value.DensityWindow.Value(), DensityMaxAccounts: value.DensityMaxAccounts,
 		DirtyIPCooldown: value.DirtyIPCooldown.Value(), FarmIPCooldown: value.FarmIPCooldown.Value(),
 		MaxIPRetries: value.MaxIPRetries, AccountIPFailThreshold: value.AccountIPFailThreshold,
@@ -704,6 +706,7 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	if input.AntiDegradeProvided {
 		next.QualityGuard.AntiDegrade.Enabled = input.AntiDegrade.Enabled
 		next.QualityGuard.AntiDegrade.Mode = strings.TrimSpace(input.AntiDegrade.Mode)
+		next.QualityGuard.AntiDegrade.Providers = append([]string(nil), input.AntiDegrade.Providers...)
 		next.QualityGuard.AntiDegrade.ThinkingMinOutput = input.AntiDegrade.ThinkingMinOutput
 		next.QualityGuard.AntiDegrade.DensityMaxAccounts = input.AntiDegrade.DensityMaxAccounts
 		next.QualityGuard.AntiDegrade.MaxIPRetries = input.AntiDegrade.MaxIPRetries
@@ -816,7 +819,7 @@ func toEditable(cfg config.Config) EditableConfig {
 
 func toEditableAntiDegrade(cfg config.AntiDegradeConfig) AntiDegradeConfig {
 	return AntiDegradeConfig{
-		Enabled: cfg.Enabled, Mode: cfg.Mode, ThinkingMinOutput: cfg.ThinkingMinOutput,
+		Enabled: cfg.Enabled, Mode: cfg.Mode, Providers: append([]string(nil), cfg.Providers...), ThinkingMinOutput: cfg.ThinkingMinOutput,
 		DensityWindow: config.Duration(cfg.DensityWindow.Value()).String(), DensityMaxAccounts: cfg.DensityMaxAccounts,
 		DirtyIPCooldown: config.Duration(cfg.DirtyIPCooldown.Value()).String(), FarmIPCooldown: config.Duration(cfg.FarmIPCooldown.Value()).String(),
 		MaxIPRetries: cfg.MaxIPRetries, AccountIPFailThreshold: cfg.AccountIPFailThreshold,

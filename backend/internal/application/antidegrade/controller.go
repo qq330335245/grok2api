@@ -18,12 +18,13 @@ var (
 	ErrAccountQuarantined = errors.New("账号因缺少推理被隔离")
 )
 
-// Node is a scheduling snapshot of one Build egress node.
+// Node is a scheduling snapshot of one egress node.
 type Node struct {
 	ID      uint64
 	Enabled bool
 	ExitIP  string
 	Name    string
+	Scope   string
 }
 
 type NodeSource interface {
@@ -79,6 +80,12 @@ func (c *Controller) SetPageInspector(inspector PageBotFlagInspector) {
 
 func (c *Controller) Enabled() bool { return c != nil && c.cfg.Enabled }
 func (c *Controller) Enforce() bool { return c != nil && c.cfg.Enforce() }
+func (c *Controller) AppliesTo(provider accountdomain.Provider) bool {
+	return c != nil && c.config().AppliesTo(provider)
+}
+func (c *Controller) ActiveFor(provider accountdomain.Provider) bool {
+	return c.Enforce() && c.AppliesTo(provider)
+}
 func (c *Controller) MaxIPRetries() int {
 	if c == nil {
 		return 0
@@ -159,6 +166,33 @@ func (c *Controller) nodeByID(nodes []Node, id uint64) (Node, bool) {
 	return Node{}, false
 }
 
+func scopeForProvider(provider accountdomain.Provider) string {
+	switch provider {
+	case accountdomain.ProviderConsole:
+		return "grok_console"
+	case accountdomain.ProviderWeb:
+		return "grok_web"
+	case accountdomain.ProviderBuild, "":
+		return "grok_build"
+	default:
+		return ""
+	}
+}
+
+func filterNodes(nodes []Node, provider accountdomain.Provider) []Node {
+	want := scopeForProvider(provider)
+	if want == "" {
+		return nodes
+	}
+	filtered := make([]Node, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Scope == "" || node.Scope == want {
+			filtered = append(filtered, node)
+		}
+	}
+	return filtered
+}
+
 func (c *Controller) allowed(cfg Config, node Node, accountID uint64, excluded map[uint64]bool, now time.Time) bool {
 	if node.ID == 0 || !node.Enabled || excluded[node.ID] {
 		return false
@@ -230,7 +264,7 @@ func (c *Controller) pick(cfg Config, nodes []Node, accountID, preferred uint64,
 
 // Admit returns a ForcedEgress node ID. Zero means "use the account binding".
 func (c *Controller) Admit(ctx context.Context, credential accountdomain.Credential, excluded map[uint64]bool) (uint64, error) {
-	if c == nil || !c.Enforce() {
+	if c == nil || !c.ActiveFor(credential.Provider) {
 		return 0, nil
 	}
 	if c.AccountQuarantined(credential.ID) {
@@ -241,6 +275,7 @@ func (c *Controller) Admit(ctx context.Context, credential accountdomain.Credent
 	if err != nil {
 		return 0, err
 	}
+	nodes = filterNodes(nodes, credential.Provider)
 	now := c.ledger.now()
 	preferred := credential.EgressNodeID
 	if preferred != 0 {
@@ -264,11 +299,15 @@ func (c *Controller) OnSuccess(accountID, nodeID uint64, exitIP string) {
 	}
 	cfg := c.config()
 	key := strings.TrimSpace(exitIP)
-	if key == "" {
-		key = fmt.Sprintf("node:%d", nodeID)
-	}
 	now := c.ledger.now()
 	c.ledger.mu.Lock()
+	if key == "" || strings.HasPrefix(key, "node:") {
+		if remembered := c.ledger.lastIPForNode(nodeID); remembered != "" {
+			key = remembered
+		} else if key == "" && nodeID != 0 {
+			key = fmt.Sprintf("node:%d", nodeID)
+		}
+	}
 	c.ledger.rememberNode(key, nodeID)
 	c.ledger.noteWindow(key, accountID, cfg.DensityWindow, now)
 	c.ledger.recordEvent(key, accountID, true, now)
@@ -277,19 +316,24 @@ func (c *Controller) OnSuccess(accountID, nodeID uint64, exitIP string) {
 }
 
 func (c *Controller) OnMissingThinking(ctx context.Context, credential accountdomain.Credential, nodeID uint64, exitIP string) {
-	if c == nil || !c.Enabled() {
+	if c == nil || !c.Enabled() || !c.AppliesTo(credential.Provider) {
 		return
 	}
 	cfg := c.config()
 	key := strings.TrimSpace(exitIP)
-	if key == "" && nodeID != 0 {
-		key = fmt.Sprintf("node:%d", nodeID)
-	}
-	if key == "" {
-		return
-	}
 	now := c.ledger.now()
 	c.ledger.mu.Lock()
+	if key == "" || strings.HasPrefix(key, "node:") {
+		if remembered := c.ledger.lastIPForNode(nodeID); remembered != "" {
+			key = remembered
+		} else if key == "" && nodeID != 0 {
+			key = fmt.Sprintf("node:%d", nodeID)
+		}
+	}
+	if key == "" {
+		c.ledger.mu.Unlock()
+		return
+	}
 	already := c.ledger.accountQuarantined(credential.ID, now)
 	c.ledger.rememberNode(key, nodeID)
 	c.ledger.noteWindow(key, credential.ID, cfg.DensityWindow, now)
@@ -398,13 +442,26 @@ func (c *Controller) ExitIP(ctx context.Context, nodeID uint64) string {
 	if c == nil || nodeID == 0 {
 		return ""
 	}
-	nodes, err := c.lookup(ctx)
-	if err != nil {
-		return fmt.Sprintf("node:%d", nodeID)
+	var real string
+	if nodes, err := c.lookup(ctx); err == nil {
+		if node, ok := c.nodeByID(nodes, nodeID); ok {
+			if key := exitKey(node); key != "" && !strings.HasPrefix(key, "node:") {
+				real = key
+			}
+		}
 	}
-	node, ok := c.nodeByID(nodes, nodeID)
-	if !ok {
-		return fmt.Sprintf("node:%d", nodeID)
+	c.ledger.mu.Lock()
+	if real != "" {
+		c.ledger.mergeIP(fmt.Sprintf("node:%d", nodeID), real, nodeID)
+		c.ledger.rememberNode(real, nodeID)
+		c.ledger.mu.Unlock()
+		_ = c.ledger.persist()
+		return real
 	}
-	return exitKey(node)
+	remembered := c.ledger.lastIPForNode(nodeID)
+	c.ledger.mu.Unlock()
+	if remembered != "" {
+		return remembered
+	}
+	return fmt.Sprintf("node:%d", nodeID)
 }

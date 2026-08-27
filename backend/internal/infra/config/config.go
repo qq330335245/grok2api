@@ -295,6 +295,7 @@ type QualityGuardConfig struct {
 type AntiDegradeConfig struct {
 	Enabled                bool     `yaml:"enabled"`
 	Mode                   string   `yaml:"mode"`
+	Providers              []string `yaml:"providers"`
 	ThinkingMinOutput      int      `yaml:"thinkingMinOutput"`
 	DensityWindow          Duration `yaml:"densityWindow"`
 	DensityMaxAccounts     int      `yaml:"densityMaxAccounts"`
@@ -875,6 +876,13 @@ func validateAntiDegrade(value AntiDegradeConfig) error {
 	}
 	if value.ExploreRatio < 0 || value.ExploreRatio > 0.5 {
 		return errors.New("qualityGuard.antiDegrade.exploreRatio 必须在 0 到 0.5 之间")
+	}
+	for _, item := range value.Providers {
+		switch strings.ToLower(strings.TrimSpace(item)) {
+		case "", "grok_build", "grok_console", "grok_web":
+		default:
+			return errors.New("qualityGuard.antiDegrade.providers 只能包含 grok_build、grok_console 或 grok_web")
+		}
 	}
 	return nil
 }

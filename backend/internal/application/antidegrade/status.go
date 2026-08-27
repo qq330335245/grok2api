@@ -2,6 +2,7 @@ package antidegrade
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -58,7 +59,7 @@ func (c *Controller) Snapshot(ctx context.Context) Status {
 	}
 
 	c.ledger.mu.Lock()
-	defer c.ledger.mu.Unlock()
+	c.ledger.rekeyFromNodes(nodes)
 
 	ips := make([]IPStatus, 0, len(c.ledger.state.IPs))
 	events := make([]EventStatus, 0)
@@ -73,15 +74,35 @@ func (c *Controller) Snapshot(ctx context.Context) Status {
 		if len(accountIDs) == 0 && !cooldownActive && !overrideActive {
 			continue
 		}
-		names := make([]string, 0, len(state.NodeIDs))
-		for _, id := range state.NodeIDs {
+		ids := append([]uint64(nil), state.NodeIDs...)
+		if id, ok := parseNodeKey(key); ok {
+			already := false
+			for _, existing := range ids {
+				if existing == id {
+					already = true
+					break
+				}
+			}
+			if !already {
+				ids = append(ids, id)
+			}
+		}
+		names := make([]string, 0, len(ids))
+		for _, id := range ids {
 			if name := strings.TrimSpace(nodeName[id]); name != "" {
 				names = append(names, name)
 			}
 		}
+		if len(names) == 0 {
+			for _, id := range ids {
+				if id != 0 {
+					names = append(names, fmt.Sprintf("#%d", id))
+				}
+			}
+		}
 		ips = append(ips, IPStatus{
 			ExitIP:                state.ExitIP,
-			NodeIDs:               append([]uint64(nil), state.NodeIDs...),
+			NodeIDs:               ids,
 			NodeNames:             names,
 			AccountIDs:            accountIDs,
 			AccountCount:          len(accountIDs),
@@ -126,7 +147,10 @@ func (c *Controller) Snapshot(ctx context.Context) Status {
 			ID: id, FailedIPs: failed, QuarantineUntil: current.QuarantineUntil, QuarantineReason: current.QuarantineReason,
 		})
 	}
-	return Status{Config: cfg, IPs: ips, Quarantined: quarantined, Events: events}
+	status := Status{Config: cfg, IPs: ips, Quarantined: quarantined, Events: events}
+	c.ledger.mu.Unlock()
+	_ = c.ledger.persist()
+	return status
 }
 
 func (c *Controller) ClearIP(_ context.Context, exitIP string) {

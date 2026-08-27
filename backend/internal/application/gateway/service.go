@@ -1041,8 +1041,9 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	holdCfg := s.qualityRetryConfig()
 	officialQualityRetry := holdCfg.Enabled
 	anti := s.antiDegradeCtl()
+	antiActive := anti != nil && anti.ActiveFor(route.Provider)
 	stickyOwnership := ownership
-	if anti != nil && anti.Enforce() {
+	if antiActive {
 		holdCfg.Enabled = true
 		if minOutput := anti.ThinkingMinOutput(); minOutput > 0 {
 			holdCfg.MinOutputTokens = minOutput
@@ -1056,8 +1057,9 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	qualityHoldEnabled := shouldHoldQualityStream(input, ownership, route, operation, holdCfg)
 	var attemptEgressNodeID uint64
 	var antiDegradePin uint64
+	var peekedStreamedThinking bool
 	noteAntiMiss := func(credential accountdomain.Credential, usedNode uint64) {
-		if anti == nil || !anti.Enforce() {
+		if anti == nil || !anti.ActiveFor(credential.Provider) {
 			return
 		}
 		anti.OnMissingThinking(ctx, credential, usedNode, anti.ExitIP(ctx, usedNode))
@@ -1132,7 +1134,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				record.CachedInputTokens = usage.CachedInputTokens
 				record.OutputTokens = usage.OutputTokens
 				record.ReasoningTokens = usage.ReasoningTokens
-				record.StreamedThinking = usage.StreamedThinking
+				record.StreamedThinking = usage.StreamedThinking || peekedStreamedThinking
 				record.TotalTokens = usage.TotalTokens
 				record.CostInUSDTicks = usage.CostInUSDTicks
 				imagePricing, imagePriced := audit.EstimateOfficialImageCost(pricingModel, "", "", response.QuotaUnits)
@@ -1304,7 +1306,7 @@ attemptLoop:
 		}
 		excluded[lease.Credential.ID] = true
 		attemptEgressNodeID = 0
-		if anti != nil && anti.Enforce() && input.ForcedAccountID == 0 {
+		if anti != nil && anti.ActiveFor(lease.Credential.Provider) && input.ForcedAccountID == 0 {
 			if anti.AccountQuarantined(lease.Credential.ID) {
 				lease.Release()
 				antiDegradePin = 0
@@ -1663,7 +1665,7 @@ attemptLoop:
 								s.logger.Warn(logPrefix+"_retry", "request_id", input.RequestID, "account_id", credential.ID, "cooldown", holdCfg.IdleAccountCooldown)
 							}
 							writeCancel()
-						} else if anti != nil && anti.Enforce() {
+						} else if anti != nil && anti.ActiveFor(credential.Provider) {
 							usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 							excludedEgressNodes[usedNode] = true
 							noteAntiMiss(credential, usedNode)
@@ -1676,13 +1678,14 @@ attemptLoop:
 					continue
 				}
 				response.Body = replay
-				if verdict == QualityWithhold && anti != nil && anti.Enforce() {
+				peekedStreamedThinking = peekUsage.StreamedThinking
+				if verdict == QualityWithhold && anti != nil && anti.ActiveFor(credential.Provider) {
 					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 					excludedEgressNodes[usedNode] = true
 					noteAntiMiss(credential, usedNode)
 				}
 				hasNextAccount := qualityAccountAttempts < holdCfg.MaxAttempts
-				if anti != nil && anti.Enforce() && antiDegradePin != 0 {
+				if anti != nil && anti.ActiveFor(credential.Provider) && antiDegradePin != 0 {
 					// Same-account ExitIP retry is still in progress.
 				} else {
 					hasNextAccount = hasNextAccount && attemptPolicy.hasNext(attempt)
@@ -1692,12 +1695,12 @@ attemptLoop:
 				}
 				commit := CommitQualityHold(verdict, qualityAccountAttempts-1, holdCfg.MaxAttempts, hasNextAccount, holdCfg.OnExhausted)
 				if verdict == QualityWithhold {
-					if anti == nil || !anti.Enforce() {
+					if anti == nil || !anti.ActiveFor(credential.Provider) {
 						if officialQualityRetry {
 							s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, holdCfg.AccountCooldown)
 						}
 					}
-				} else if verdict == QualityDeliver && anti != nil && anti.Enabled() {
+				} else if verdict == QualityDeliver && anti != nil && anti.Enabled() && anti.AppliesTo(credential.Provider) {
 					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 					anti.OnSuccess(credential.ID, usedNode, anti.ExitIP(ctx, usedNode))
 				}

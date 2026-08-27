@@ -4,6 +4,7 @@ import { createObjectDecoder, hasShape, isArrayOf, isBoolean, isNumber, isOneOf,
 export type AntiDegradeConfigDTO = {
   enabled: boolean;
   mode: "observe" | "enforce";
+  providers: string[];
   thinkingMinOutput: number;
   densityWindow: string;
   densityMaxAccounts: number;
@@ -63,6 +64,7 @@ export type AntiDegradeStatusDTO = {
 const configValidator = hasShape({
   enabled: isBoolean,
   mode: isOneOf("observe", "enforce"),
+  providers: isOptional(isArrayOf(isString)),
   thinkingMinOutput: isNumber,
   densityWindow: isString,
   densityMaxAccounts: isNumber,
