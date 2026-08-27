@@ -1,0 +1,137 @@
+name: GHCR Quality Guard
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/egress-quality-guard/**"
+      - ".github/workflows/ghcr-quality-guard.yml"
+
+concurrency:
+  group: ghcr-quality-guard-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: grok2api-egress-quality-guard
+
+jobs:
+  build_and_publish:
+    name: Publish quality-guard (${{ matrix.arch }})
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Normalize image name
+        id: image
+        shell: bash
+        run: |
+          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${owner}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=latest-${{ matrix.arch }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,suffix=-${{ matrix.arch }},format=short
+            type=raw,value=${{ github.ref_name }}-${{ matrix.arch }},enable=${{ github.ref_type == 'branch' }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./tools/egress-quality-guard/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=quality-guard-${{ matrix.arch }}
+          cache-to: type=gha,scope=quality-guard-${{ matrix.arch }},mode=max
+          provenance: false
+          sbom: false
+
+  merge:
+    name: Merge quality-guard manifest
+    needs:
+      - build_and_publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Normalize image name
+        id: image
+        shell: bash
+        run: |
+          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${owner}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          img="${{ steps.image.outputs.name }}"
+          short_sha="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+
+          docker buildx imagetools create \
+            -t "${img}:latest" \
+            "${img}:latest-amd64" \
+            "${img}:latest-arm64"
+
+          docker buildx imagetools create \
+            -t "${img}:sha-${short_sha}" \
+            "${img}:sha-${short_sha}-amd64" \
+            "${img}:sha-${short_sha}-arm64"
+
+          if [ "${GITHUB_REF_TYPE}" = "branch" ]; then
+            docker buildx imagetools create \
+              -t "${img}:${GITHUB_REF_NAME}" \
+              "${img}:${GITHUB_REF_NAME}-amd64" \
+              "${img}:${GITHUB_REF_NAME}-arm64"
+          fi
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect "${{ steps.image.outputs.name }}:latest"
