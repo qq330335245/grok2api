@@ -1668,7 +1668,8 @@ attemptLoop:
 						} else if anti != nil && anti.ActiveFor(credential.Provider) {
 							usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 							excludedEgressNodes[usedNode] = true
-							noteAntiMiss(credential, usedNode)
+							anti.OnIdleStream(credential, usedNode, anti.ExitIP(ctx, usedNode))
+							antiDegradePin = credential.ID
 							s.logger.Warn(logPrefix+"_ip_retry", "request_id", input.RequestID, "account_id", credential.ID, "node_id", usedNode, "quarantined", anti.AccountQuarantined(credential.ID))
 						}
 					}
@@ -1679,6 +1680,9 @@ attemptLoop:
 				}
 				response.Body = replay
 				peekedStreamedThinking = peekUsage.StreamedThinking
+				if antiDegradeRetryMiss(antiDegradePin, peekedStreamedThinking) {
+					verdict = QualityWithhold
+				}
 				if verdict == QualityWithhold && anti != nil && anti.ActiveFor(credential.Provider) {
 					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 					excludedEgressNodes[usedNode] = true

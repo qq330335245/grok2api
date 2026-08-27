@@ -59,6 +59,19 @@ func TestClassifyQualityHold(t *testing.T) {
 	}
 }
 
+func TestAntiDegradeRetryMiss(t *testing.T) {
+	t.Parallel()
+	if antiDegradeRetryMiss(0, false) {
+		t.Fatal("first attempt short no-think must not count as retry miss")
+	}
+	if antiDegradeRetryMiss(7, true) {
+		t.Fatal("retry with streamed thinking is success")
+	}
+	if !antiDegradeRetryMiss(7, false) {
+		t.Fatal("same-account IP retry without streamed thinking must count as miss")
+	}
+}
+
 func TestDecideQualityRetry(t *testing.T) {
 	t.Parallel()
 	if got := DecideQualityRetry(QualityDeliver, 0, 2, qualityRetryFailOpen); got != QualityActionDeliver {
@@ -1005,6 +1018,11 @@ func TestShouldHoldQualityStreamGates(t *testing.T) {
 	input := Input{Streaming: true, PublicModel: "grok-4.6"}
 	if !shouldHoldQualityStream(input, nil, route, audit.OperationChat, cfg) {
 		t.Fatal("expected hold on thinking build chat")
+	}
+	emptyEffort := input
+	emptyEffort.Body = []byte(`{"model":"grok-4.6"}`)
+	if !shouldHoldQualityStream(emptyEffort, nil, route, audit.OperationChat, cfg) {
+		t.Fatal("empty effort on grok-4.6 chat must still hold")
 	}
 	off := cfg
 	off.Enabled = false

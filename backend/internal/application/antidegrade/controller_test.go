@@ -233,3 +233,54 @@ func TestAdmitKeepsBuildRetryOnBuildNodes(t *testing.T) {
 		t.Fatalf("picked=%d, want build node 7", picked)
 	}
 }
+
+func TestAdmitSkipsNodesWithoutRealExitIP(t *testing.T) {
+	nodes := staticNodes{
+		{ID: 214, Enabled: true, ExitIP: "", Name: "us-02"},
+		{ID: 7, Enabled: true, ExitIP: "147.135.213.131", Name: "katabump"},
+	}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, DensityMaxAccounts: 5, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	picked, err := controller.Admit(context.Background(), accountdomain.Credential{ID: 1, Provider: accountdomain.ProviderBuild}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if picked != 7 {
+		t.Fatalf("picked=%d, want node with real ExitIP", picked)
+	}
+}
+
+func TestCooldownPlaceholderExcludesNodeEvenAfterIPAppears(t *testing.T) {
+	nodes := staticNodes{{ID: 214, Enabled: true, ExitIP: "198.51.100.9"}}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, DirtyIPCooldown: 30 * time.Minute, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	controller.ledger.now = func() time.Time { return now }
+	cred := accountdomain.Credential{ID: 9, Provider: accountdomain.ProviderBuild}
+	controller.OnMissingThinking(context.Background(), cred, 214, "node:214")
+	if _, err := controller.Admit(context.Background(), accountdomain.Credential{ID: 10, Provider: accountdomain.ProviderBuild}, nil); !errors.Is(err, ErrNoEligibleExitIP) {
+		t.Fatalf("cooled node must stay ineligible, err=%v", err)
+	}
+}
+
+func TestIdleStreamCoolsIPWithoutCountingTowardK(t *testing.T) {
+	nodes := staticNodes{
+		{ID: 1, Enabled: true, ExitIP: "10.0.0.1"},
+		{ID: 2, Enabled: true, ExitIP: "10.0.0.2"},
+	}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, AccountIPFailThreshold: 2, DirtyIPCooldown: 30 * time.Minute, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	controller.ledger.now = func() time.Time { return now }
+	cred := accountdomain.Credential{ID: 7, Provider: accountdomain.ProviderBuild}
+	controller.OnIdleStream(cred, 1, "10.0.0.1")
+	controller.OnIdleStream(cred, 2, "10.0.0.2")
+	if controller.AccountQuarantined(7) {
+		t.Fatal("idle streams must not quarantine")
+	}
+	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
+	if controller.AccountQuarantined(7) {
+		t.Fatal("one withhold plus idles must not reach K=2")
+	}
+	controller.OnMissingThinking(context.Background(), cred, 2, "10.0.0.2")
+	if !controller.AccountQuarantined(7) {
+		t.Fatal("two withholds must quarantine")
+	}
+}

@@ -42,3 +42,10 @@ func firstNonZero(values ...uint64) uint64 {
 	}
 	return 0
 }
+
+// antiDegradeRetryMiss is true when a same-account ExitIP retry still has no
+// streamed thinking. Short first-attempt replies may deliver; retries must not
+// count as success.
+func antiDegradeRetryMiss(pin uint64, streamedThinking bool) bool {
+	return pin != 0 && !streamedThinking
+}

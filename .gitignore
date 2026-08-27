@@ -51,3 +51,5 @@ __pycache__/
 /tmp/
 /Dockerfile.local
 .gotmp/
+.gomodcache/
+.pi-subagents/

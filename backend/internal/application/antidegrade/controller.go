@@ -150,6 +150,18 @@ func exitKey(node Node) string {
 	return fmt.Sprintf("node:%d", node.ID)
 }
 
+func hasRealExitIP(node Node) bool {
+	key := exitKey(node)
+	return key != "" && !strings.HasPrefix(key, "node:")
+}
+
+func nodePlaceholder(nodeID uint64) string {
+	if nodeID == 0 {
+		return ""
+	}
+	return fmt.Sprintf("node:%d", nodeID)
+}
+
 func (c *Controller) lookup(ctx context.Context) ([]Node, error) {
 	if c.nodes == nil {
 		return nil, nil
@@ -193,21 +205,42 @@ func filterNodes(nodes []Node, provider accountdomain.Provider) []Node {
 	return filtered
 }
 
+func (c *Controller) nodeCoolingLocked(node Node, now time.Time) bool {
+	keys := make([]string, 0, 3)
+	if key := exitKey(node); key != "" {
+		keys = append(keys, key)
+	}
+	if placeholder := nodePlaceholder(node.ID); placeholder != "" {
+		keys = append(keys, placeholder)
+	}
+	if ip := c.ledger.lastIPForNode(node.ID); ip != "" {
+		keys = append(keys, ip)
+	}
+	seen := map[string]struct{}{}
+	for _, key := range keys {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if c.ledger.cooling(c.ledger.state.IPs[key], now) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Controller) allowed(cfg Config, node Node, accountID uint64, excluded map[uint64]bool, now time.Time) bool {
-	if node.ID == 0 || !node.Enabled || excluded[node.ID] {
+	if node.ID == 0 || !node.Enabled || excluded[node.ID] || !hasRealExitIP(node) {
 		return false
 	}
 	key := exitKey(node)
-	if key == "" {
-		return false
-	}
 	c.ledger.mu.Lock()
 	defer c.ledger.mu.Unlock()
 	c.ledger.rememberNode(key, node.ID)
-	state := c.ledger.ip(key)
-	if c.ledger.cooling(state, now) {
+	if c.nodeCoolingLocked(node, now) {
 		return false
 	}
+	state := c.ledger.ip(key)
 	if c.ledger.accountInWindow(state, accountID, cfg.DensityWindow, now) {
 		return true
 	}
@@ -222,18 +255,15 @@ func (c *Controller) pick(cfg Config, nodes []Node, accountID, preferred uint64,
 	var options []candidate
 	c.ledger.mu.Lock()
 	for _, node := range nodes {
-		if node.ID == 0 || !node.Enabled || excluded[node.ID] {
+		if node.ID == 0 || !node.Enabled || excluded[node.ID] || !hasRealExitIP(node) {
 			continue
 		}
 		key := exitKey(node)
-		if key == "" {
-			continue
-		}
 		c.ledger.rememberNode(key, node.ID)
-		state := c.ledger.ip(key)
-		if c.ledger.cooling(state, now) {
+		if c.nodeCoolingLocked(node, now) {
 			continue
 		}
+		state := c.ledger.ip(key)
 		if !c.ledger.accountInWindow(state, accountID, cfg.DensityWindow, now) && c.ledger.densityCount(state, cfg.DensityWindow, now) >= cfg.DensityMaxAccounts {
 			continue
 		}
@@ -293,21 +323,35 @@ func (c *Controller) Admit(ctx context.Context, credential accountdomain.Credent
 	return picked, nil
 }
 
+func (c *Controller) resolveKeyLocked(nodeID uint64, exitIP string) string {
+	key := strings.TrimSpace(exitIP)
+	if key == "" || strings.HasPrefix(key, "node:") {
+		if remembered := c.ledger.lastIPForNode(nodeID); remembered != "" {
+			return remembered
+		}
+		if nodeID != 0 {
+			return nodePlaceholder(nodeID)
+		}
+	}
+	return key
+}
+
+func (c *Controller) coolDirtyLocked(key string, nodeID uint64, until time.Time) {
+	c.ledger.cool(key, reasonDirtyIP, until)
+	c.ledger.rememberNode(key, nodeID)
+	// Only stamp the node:N key when that is the identity we actually cooled.
+	// Cooling a real IP must not also freeze node:N, or lifting the IP later
+	// would still exclude the node.
+}
+
 func (c *Controller) OnSuccess(accountID, nodeID uint64, exitIP string) {
 	if c == nil || !c.Enabled() || nodeID == 0 && exitIP == "" {
 		return
 	}
 	cfg := c.config()
-	key := strings.TrimSpace(exitIP)
 	now := c.ledger.now()
 	c.ledger.mu.Lock()
-	if key == "" || strings.HasPrefix(key, "node:") {
-		if remembered := c.ledger.lastIPForNode(nodeID); remembered != "" {
-			key = remembered
-		} else if key == "" && nodeID != 0 {
-			key = fmt.Sprintf("node:%d", nodeID)
-		}
-	}
+	key := c.resolveKeyLocked(nodeID, exitIP)
 	c.ledger.rememberNode(key, nodeID)
 	c.ledger.noteWindow(key, accountID, cfg.DensityWindow, now)
 	c.ledger.recordEvent(key, accountID, true, now)
@@ -315,21 +359,36 @@ func (c *Controller) OnSuccess(accountID, nodeID uint64, exitIP string) {
 	_ = c.ledger.persist()
 }
 
+func (c *Controller) OnIdleStream(credential accountdomain.Credential, nodeID uint64, exitIP string) {
+	if c == nil || !c.Enabled() || !c.AppliesTo(credential.Provider) {
+		return
+	}
+	cfg := c.config()
+	now := c.ledger.now()
+	c.ledger.mu.Lock()
+	key := c.resolveKeyLocked(nodeID, exitIP)
+	if key == "" {
+		c.ledger.mu.Unlock()
+		return
+	}
+	c.ledger.rememberNode(key, nodeID)
+	c.ledger.noteWindow(key, credential.ID, cfg.DensityWindow, now)
+	if cfg.Enforce() {
+		c.coolDirtyLocked(key, nodeID, now.Add(cfg.DirtyIPCooldown))
+	}
+	c.ledger.mu.Unlock()
+	_ = c.ledger.persist()
+	c.logger.Info("antidegrade_idle_stream", "account_id", credential.ID, "node_id", nodeID, "exit_ip", key)
+}
+
 func (c *Controller) OnMissingThinking(ctx context.Context, credential accountdomain.Credential, nodeID uint64, exitIP string) {
 	if c == nil || !c.Enabled() || !c.AppliesTo(credential.Provider) {
 		return
 	}
 	cfg := c.config()
-	key := strings.TrimSpace(exitIP)
 	now := c.ledger.now()
 	c.ledger.mu.Lock()
-	if key == "" || strings.HasPrefix(key, "node:") {
-		if remembered := c.ledger.lastIPForNode(nodeID); remembered != "" {
-			key = remembered
-		} else if key == "" && nodeID != 0 {
-			key = fmt.Sprintf("node:%d", nodeID)
-		}
-	}
+	key := c.resolveKeyLocked(nodeID, exitIP)
 	if key == "" {
 		c.ledger.mu.Unlock()
 		return
@@ -345,7 +404,7 @@ func (c *Controller) OnMissingThinking(ctx context.Context, credential accountdo
 		if already {
 			distinct = c.ledger.distinctFailCount(credential.ID, now)
 		} else {
-			c.ledger.cool(key, reasonDirtyIP, now.Add(cfg.DirtyIPCooldown))
+			c.coolDirtyLocked(key, nodeID, now.Add(cfg.DirtyIPCooldown))
 			distinct = c.ledger.noteAccountFail(credential.ID, key, now)
 			if distinct >= cfg.AccountIPFailThreshold {
 				lifted = c.ledger.quarantineAccount(credential.ID, now.Add(cfg.AccountQuarantineTTL), reasonQuarantine)
