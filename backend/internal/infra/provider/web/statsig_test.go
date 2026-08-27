@@ -298,11 +298,11 @@ func TestStatsigSignerCachesByMethodAndPathForOneHour(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{"x-statsig-id": encoded})
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
 	})}
-	first, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-a", nil, http.MethodPost, "https://grok.com/rest/test", "")
+	first, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-a", nil, http.MethodPost, "https://grok.com/rest/test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-b", nil, http.MethodPost, "https://grok.com/rest/test", "")
+	second, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-b", nil, http.MethodPost, "https://grok.com/rest/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestStatsigSignerCachesByMethodAndPathForOneHour(t *testing.T) {
 	}
 
 	now = now.Add(time.Hour)
-	third, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-b", nil, http.MethodPost, "https://grok.com/rest/test", "")
+	third, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-b", nil, http.MethodPost, "https://grok.com/rest/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestStatsigSignerCachesByMethodAndPathForOneHour(t *testing.T) {
 	}
 
 	signer.Invalidate("https://grok.com", "https://signer.example/sign", http.MethodPost, "https://grok.com/rest/test")
-	fourth, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-a", nil, http.MethodPost, "https://grok.com/rest/test", "")
+	fourth, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-a", nil, http.MethodPost, "https://grok.com/rest/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestStatsigSignerCachesByMethodAndPathForOneHour(t *testing.T) {
 		t.Fatalf("invalidation fetches=%d third=%q fourth=%q", fetches, third, fourth)
 	}
 
-	if _, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-a", nil, http.MethodPost, "https://grok.com/rest/other", ""); err != nil {
+	if _, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token-a", nil, http.MethodPost, "https://grok.com/rest/other"); err != nil {
 		t.Fatal(err)
 	}
 	if fetches != 4 {
@@ -399,7 +399,7 @@ func TestStatsigInvalidationDoesNotReuseRejectedValue(t *testing.T) {
 	previous := base64.RawStdEncoding.EncodeToString(raw)
 	signer := newStatsigSigner()
 	signer.now = func() time.Time { return now }
-	key, _, err := statsigSignatureKey("https://grok.com", "https://signer.example/sign", http.MethodPost, "https://grok.com/rest/test", "")
+	key, _, err := statsigSignatureKey("https://grok.com", "https://signer.example/sign", http.MethodPost, "https://grok.com/rest/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestStatsigInvalidationDoesNotReuseRejectedValue(t *testing.T) {
 		return "", errors.New("signer unavailable")
 	}
 	signer.Invalidate("https://grok.com", "https://signer.example/sign", http.MethodPost, "https://grok.com/rest/test")
-	value, source, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token", nil, http.MethodPost, "https://grok.com/rest/test", "")
+	value, source, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token", nil, http.MethodPost, "https://grok.com/rest/test")
 	if err == nil || value != "" || source != "" {
 		t.Fatalf("value=%q source=%q err=%v", value, source, err)
 	}
@@ -435,84 +435,5 @@ func TestStatsigInvalidationOnlyAppliesToURLMode(t *testing.T) {
 	urlMode := &Adapter{cfg: Config{BaseURL: "https://grok.com", StatsigMode: "url", StatsigSignerURL: "https://signer.example/sign"}, statsig: newStatsigSigner()}
 	if !urlMode.invalidateSignedStatsig(http.MethodPost, "https://grok.com/rest/test") {
 		t.Fatal("URL Statsig must be invalidated after anti-bot rejection")
-	}
-}
-
-func TestFetchStatsigMetaPrefersImagineDocument(t *testing.T) {
-	var paths []string
-	do := func(request *http.Request) (*http.Response, error) {
-		paths = append(paths, request.URL.Path)
-		if request.URL.Path != "/imagine" {
-			t.Fatalf("unexpected path %q", request.URL.Path)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<html><head><meta name="grok-site-verification" content="imagine-meta"/></head></html>`)), Header: http.Header{}}, nil
-	}
-	value, err := fetchStatsigMetaContentPreferDocument(context.Background(), "https://grok.com", "sso-token", &infraegress.Lease{UserAgent: "test-agent"}, "/imagine", do)
-	if err != nil || value != "imagine-meta" {
-		t.Fatalf("value=%q err=%v paths=%v", value, err, paths)
-	}
-	if len(paths) != 1 || paths[0] != "/imagine" {
-		t.Fatalf("paths=%v", paths)
-	}
-}
-
-func TestFetchStatsigMetaDoesNotFallBackWhenImagineHasNoVerification(t *testing.T) {
-	var paths []string
-	do := func(request *http.Request) (*http.Response, error) {
-		paths = append(paths, request.URL.Path)
-		if request.URL.Path != "/imagine" {
-			t.Fatalf("unexpected fallback to %q", request.URL.Path)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<html><head></head></html>`)), Header: http.Header{}}, nil
-	}
-	_, err := fetchStatsigMetaContentPreferDocument(context.Background(), "https://grok.com", "sso-token", &infraegress.Lease{UserAgent: "test-agent"}, "/imagine", do)
-	if err == nil || !strings.Contains(err.Error(), "Imagine") {
-		t.Fatalf("err=%v paths=%v", err, paths)
-	}
-	if len(paths) != 1 || paths[0] != "/imagine" {
-		t.Fatalf("paths=%v", paths)
-	}
-}
-
-func TestConversationsNewStatsigSkipsHourlyCache(t *testing.T) {
-	var fetches int
-	signer := newStatsigSigner()
-	signer.validateEndpoint = func(context.Context, string) error { return nil }
-	signer.fetchMeta = func(context.Context, string, string, *infraegress.Lease) (string, error) {
-		fetches++
-		return fmt.Sprintf("meta-%d", fetches), nil
-	}
-	signer.client = &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-		raw := make([]byte, 70)
-		raw[0] = byte(fetches)
-		body, _ := json.Marshal(map[string]string{"x-statsig-id": base64.RawStdEncoding.EncodeToString(raw)})
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
-	})}
-	target := "https://grok.com/rest/app-chat/conversations/new"
-	first, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token", nil, http.MethodPost, target, "/imagine")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, _, err := signer.Sign(context.Background(), "https://grok.com", "https://signer.example/sign", "token", nil, http.MethodPost, target, "/imagine")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fetches != 2 || first == second {
-		t.Fatalf("fetches=%d first=%q second=%q", fetches, first, second)
-	}
-}
-
-func TestStatsigDocumentForImagineReferer(t *testing.T) {
-	request, err := http.NewRequest(http.MethodPost, "https://grok.com/rest/app-chat/conversations/new", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Referer", "https://grok.com/imagine")
-	if got := statsigDocumentForRequest(request); got != "/imagine" {
-		t.Fatalf("document=%q", got)
-	}
-	request.Header.Set("Referer", "https://grok.com/")
-	if got := statsigDocumentForRequest(request); got != "" {
-		t.Fatalf("chat document=%q", got)
 	}
 }

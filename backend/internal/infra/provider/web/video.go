@@ -22,8 +22,6 @@ import (
 type webMediaUpstreamError struct {
 	status              int
 	summary             string
-	code                string
-	message             string
 	bodyBytes           int
 	bodyTruncated       bool
 	bodyPrefixSHA256    string
@@ -56,19 +54,21 @@ func isClearanceRefreshableMediaError(e *webMediaUpstreamError) bool {
 	return e.cloudflareChallenge || e.bodyKind == "empty" || e.bodyKind == "html"
 }
 
-// isStalePageMediaError is the Imagine version gate: JSON 403 with
-// "This page is out of date. Reload to continue.". It is not a Cloudflare
-// HTML challenge and must not invalidate Clearance. Fresh Statsig from the
-// current /imagine page can recover it.
-func isStalePageMediaError(e *webMediaUpstreamError) bool {
-	if e == nil || e.status != http.StatusForbidden || e.bodyKind != "json" {
+// isStatsigRefreshableMediaError identifies application-layer rejections that
+// tell the browser to reload its page state. Grok uses code 7 for this anti-bot
+// response, but the same code can also wrap a definitive account block; blocked
+// credentials must remain terminal and must not be replayed with a fresh signature.
+func isStatsigRefreshableMediaError(e *webMediaUpstreamError, body []byte) bool {
+	if e == nil || e.status != http.StatusForbidden || e.bodyKind != "json" || provider.IsDefinitiveAccountBlockBody(body) {
 		return false
 	}
-	message := strings.ToLower(strings.TrimSpace(e.message))
-	if message == "" {
-		message = strings.ToLower(e.summary)
+	code, message, structured := extractWebMediaUpstreamErrorFields(body)
+	if !structured {
+		return false
 	}
-	return strings.Contains(message, "out of date") || strings.Contains(message, "reload to continue")
+	normalized := strings.ToLower(message)
+	return code == "7" || strings.Contains(normalized, "anti-bot") ||
+		strings.Contains(normalized, "page is out of date") || strings.Contains(normalized, "reload to continue")
 }
 
 func (e *webMediaUpstreamError) providerResponse() *provider.Response {
@@ -107,12 +107,9 @@ var (
 // body metadata and a prefix hash, never the upstream response body itself.
 func newWebMediaUpstreamError(status int, body []byte, truncated bool) *webMediaUpstreamError {
 	digest := sha256.Sum256(body)
-	code, message, _ := extractWebMediaUpstreamErrorFields(body)
 	return &webMediaUpstreamError{
 		status:              status,
 		summary:             summarizeWebMediaUpstreamError(status, body, truncated),
-		code:                code,
-		message:             message,
 		bodyBytes:           len(body),
 		bodyTruncated:       truncated,
 		bodyPrefixSHA256:    fmt.Sprintf("%x", digest),

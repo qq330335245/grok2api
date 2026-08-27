@@ -1398,7 +1398,7 @@ func (a *Adapter) postJSON(ctx context.Context, cfg Config, lease *egress.Lease,
 
 func (a *Adapter) postJSONWithReferer(ctx context.Context, cfg Config, lease *egress.Lease, token, endpoint string, payload any, timeout time.Duration, referer string) (*http.Response, error) {
 	data, _ := json.Marshal(payload)
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < 2; attempt++ {
 		requestCtx, cancel := context.WithTimeout(ctx, timeout)
 		request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(data))
 		if err != nil {
@@ -1432,13 +1432,17 @@ func (a *Adapter) postJSONWithReferer(ctx context.Context, cfg Config, lease *eg
 				_ = a.invalidateSignedStatsig(http.MethodPost, endpoint)
 				return response, nil
 			}
-			// Stale Imagine page signatures are JSON 403s, not Cloudflare HTML.
-			// Refresh Statsig and replay; the upstream rejected the request
-			// before creating a job. Do not touch Clearance or egress health.
-			if isStalePageMediaError(upstreamErr) && attempt < 3 && a.invalidateSignedStatsig(http.MethodPost, endpoint) {
-				continue
+			// Code 7 is the application-layer equivalent of reloading the Grok
+			// page: refresh only the path-bound Statsig signature and replay the
+			// explicitly rejected POST once. It is not a Cloudflare challenge, so
+			// the current Clearance lease remains valid.
+			if isStatsigRefreshableMediaError(upstreamErr, body) {
+				if attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, endpoint) {
+					continue
+				}
+				return response, nil
 			}
-			// Other structured JSON responses are application policy decisions.
+			// Remaining structured JSON responses are application policy decisions.
 			// They must not invalidate Clearance, affect egress health, or be replayed.
 			if upstreamErr.bodyKind == "json" || attempt > 0 || !a.invalidateSignedStatsig(http.MethodPost, endpoint) {
 				return response, nil
