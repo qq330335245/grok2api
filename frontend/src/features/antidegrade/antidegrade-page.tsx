@@ -329,7 +329,7 @@ function IPLoadPanel({ ips, locale, onClear, clearing }: { ips: AntiDegradeIPDTO
             const cooling = group.items.filter((ip) => ip.cooling).length;
             return (
               <div key={group.key} className="border-b last:border-b-0">
-                <button type="button" className="flex w-full items-center gap-2 px-4 py-2 text-left sm:px-5" onClick={() => setExpanded((current) => ({ ...current, [group.key]: !open }))}>
+                <button type="button" className="flex w-full items-center gap-2 px-4 py-2.5 text-left sm:px-5" onClick={() => setExpanded((current) => ({ ...current, [group.key]: !open }))}>
                   <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition", !open && "-rotate-90")} />
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.title}</span>
                   <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
@@ -345,7 +345,7 @@ function IPLoadPanel({ ips, locale, onClear, clearing }: { ips: AntiDegradeIPDTO
           {dedicatedSorted.length > 0 ? (
             <div className={cn(stickyGroups.length > 0 && "border-t")}>
               {stickyGroups.length > 0 ? (
-                <p className="px-4 py-2 text-[11px] text-muted-foreground sm:px-5">{t("antidegrade.fixedExits")}</p>
+                <p className="px-4 py-2.5 text-[11px] text-muted-foreground sm:px-5">{t("antidegrade.fixedExits")}</p>
               ) : null}
               {dedicatedSorted.map((ip) => (
                 <CompactIPRow key={ip.exitIp} ip={ip} locale={locale} sticky={false} clearing={clearing} onClear={() => onClear(ip.exitIp)} />
@@ -370,19 +370,27 @@ function CompactIPRow({ ip, locale, sticky, onClear, clearing }: { ip: AntiDegra
     ? ip.accounts.slice(0, 2).map((account) => account.name || account.id).join(" · ") + (ip.accounts.length > 2 ? ` +${ip.accounts.length - 2}` : "")
     : "";
   const reason = ip.cooldownReason ? t(`antidegrade.reasons.${ip.cooldownReason}`, { defaultValue: ip.cooldownReason }) : "";
+  const limit = Math.max(ip.accountLimit, 1);
+  const ratio = Math.min(ip.accountCount / limit, 1);
+  const barTone = ip.cooling ? "bg-muted-foreground/40" : isFullIP(ip) ? "bg-destructive" : ratio >= 0.6 ? "bg-amber-500" : "bg-emerald-500";
   return (
-    <div className="flex items-center gap-3 border-t px-4 py-1.5 sm:px-5">
+    <div className="flex items-center gap-3 border-t px-4 py-2.5 sm:px-5">
       <span className={cn("size-1.5 shrink-0 rounded-full", ip.cooling ? "bg-muted-foreground/50" : isFullIP(ip) ? "bg-destructive" : "bg-emerald-500")} />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-[1.2]">
         <p className="truncate font-mono text-xs">{primary}</p>
         {secondary || extra ? (
-          <p className="truncate text-[11px] text-muted-foreground">{[secondary, extra].filter(Boolean).join(" · ")}</p>
+          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{[secondary, extra].filter(Boolean).join(" · ")}</p>
         ) : null}
         {ip.cooling && ip.cooldownUntil ? (
-          <p className="truncate text-[11px] text-muted-foreground">{reason} · {t("antidegrade.until", { time: formatDateTime(ip.cooldownUntil, locale) })}</p>
+          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{reason} · {t("antidegrade.until", { time: formatDateTime(ip.cooldownUntil, locale) })}</p>
         ) : null}
       </div>
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{ip.accountCount}/{ip.accountLimit}</span>
+      <div className="flex min-w-28 flex-1 items-center gap-2">
+        <div className="h-1.5 min-w-16 flex-1 overflow-hidden rounded-full bg-muted">
+          <i className={cn("block h-full", barTone)} style={{ width: `${Math.max(ratio * 100, ip.accountCount > 0 ? 8 : 0)}%` }} />
+        </div>
+        <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{ip.accountCount}/{ip.accountLimit}</span>
+      </div>
       <span className={cn("w-12 shrink-0 text-right text-[11px]", ipStatusClass(ip))}>{ipStatusLabel(ip, t)}</span>
       {ip.cooling ? (
         <Button size="sm" variant="ghost" className="h-7 px-2" disabled={clearing} onClick={onClear}>{t("antidegrade.clearIp")}</Button>
