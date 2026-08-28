@@ -119,14 +119,16 @@ type SegmentedSelectorConfig struct {
 
 // AuditConfig 是管理接口使用的审计可编辑输入。
 type AuditConfig struct {
-	BufferSize                int
-	BatchSize                 int
-	FlushInterval             string
-	CommitDelayMS             int
-	RetentionDays             int
-	RetentionDaysProvided     bool
-	TrafficLogEnabled         bool
-	TrafficLogEnabledProvided bool
+	BufferSize                 int
+	BatchSize                  int
+	FlushInterval              string
+	CommitDelayMS              int
+	RetentionDays              int
+	RetentionDaysProvided      bool
+	TrafficLogEnabled          bool
+	TrafficLogEnabledProvided  bool
+	TrafficLogMaxFiles         int
+	TrafficLogMaxFilesProvided bool
 }
 
 // ClientKeyDefaultsConfig 是管理接口使用的密钥默认限制输入。
@@ -446,12 +448,16 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	if value.Audit.TrafficLogEnabled != nil {
 		trafficLogEnabled = *value.Audit.TrafficLogEnabled
 	}
+	trafficLogMaxFiles := base.Audit.TrafficLogMaxFiles
+	if value.Audit.TrafficLogMaxFiles != nil {
+		trafficLogMaxFiles = *value.Audit.TrafficLogMaxFiles
+	}
 	base.Audit = config.AuditConfig{
 		BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: config.Duration(value.Audit.FlushInterval),
 		CommitDelay: config.Duration(commitDelay), RetentionDays: retentionDays,
 		LedgerMode: base.Audit.LedgerMode, LedgerFailureThreshold: base.Audit.LedgerFailureThreshold,
 		LedgerUnhealthyGrace: base.Audit.LedgerUnhealthyGrace, LedgerQueueHighWatermarkPct: base.Audit.LedgerQueueHighWatermarkPct,
-		TrafficLogEnabled: trafficLogEnabled, TrafficLogDirectory: base.Audit.TrafficLogDirectory,
+		TrafficLogEnabled: trafficLogEnabled, TrafficLogDirectory: base.Audit.TrafficLogDirectory, TrafficLogMaxFiles: trafficLogMaxFiles,
 	}
 	base.ClientKeyDefaults = config.ClientKeyDefaultsConfig{
 		RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
@@ -538,8 +544,9 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 		},
 		Audit: settingsdomain.AuditConfig{
 			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: value.Audit.FlushInterval.Value(), CommitDelay: value.Audit.CommitDelay.Value(),
-			RetentionDays:     intPointer(value.Audit.RetentionDays),
-			TrafficLogEnabled: boolPointer(value.Audit.TrafficLogEnabled),
+			RetentionDays:      intPointer(value.Audit.RetentionDays),
+			TrafficLogEnabled:  boolPointer(value.Audit.TrafficLogEnabled),
+			TrafficLogMaxFiles: intPointer(value.Audit.TrafficLogMaxFiles),
 		},
 		ClientKeyDefaults: settingsdomain.ClientKeyDefaultsConfig{
 			RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
@@ -654,6 +661,16 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	}
 	if input.Audit.TrafficLogEnabledProvided {
 		next.Audit.TrafficLogEnabled = input.Audit.TrafficLogEnabled
+	}
+	if input.Audit.TrafficLogMaxFilesProvided {
+		maxFiles := input.Audit.TrafficLogMaxFiles
+		if maxFiles < 1 {
+			maxFiles = 50
+		}
+		if maxFiles > 500 {
+			maxFiles = 500
+		}
+		next.Audit.TrafficLogMaxFiles = maxFiles
 	}
 	next.ClientKeyDefaults.RPMLimit = input.ClientKeyDefaults.RPMLimit
 	next.ClientKeyDefaults.MaxConcurrent = input.ClientKeyDefaults.MaxConcurrent
@@ -812,6 +829,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			BufferSize: cfg.Audit.BufferSize, BatchSize: cfg.Audit.BatchSize, FlushInterval: cfg.Audit.FlushInterval.String(), CommitDelayMS: int(cfg.Audit.CommitDelay.Value() / time.Millisecond),
 			RetentionDays: cfg.Audit.RetentionDays, RetentionDaysProvided: true,
 			TrafficLogEnabled: cfg.Audit.TrafficLogEnabled, TrafficLogEnabledProvided: true,
+			TrafficLogMaxFiles: cfg.Audit.TrafficLogMaxFiles, TrafficLogMaxFilesProvided: true,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: cfg.ClientKeyDefaults.RPMLimit, MaxConcurrent: cfg.ClientKeyDefaults.MaxConcurrent},
 		Accounts: AccountsConfig{

@@ -255,6 +255,7 @@ type AuditConfig struct {
 	LedgerQueueHighWatermarkPct int      `yaml:"ledgerQueueHighWatermarkPercent"`
 	TrafficLogEnabled           bool     `yaml:"trafficLogEnabled"`
 	TrafficLogDirectory         string   `yaml:"trafficLogDirectory"`
+	TrafficLogMaxFiles          int      `yaml:"trafficLogMaxFiles"`
 }
 
 // QualityGuardConfig defines the optional egress-quality sidecar policy.
@@ -1010,6 +1011,7 @@ func defaultConfig() Config {
 			RetentionDays: 7,
 			LedgerMode:    "enforce", LedgerFailureThreshold: 1,
 			LedgerUnhealthyGrace: Duration(10 * time.Second), LedgerQueueHighWatermarkPct: 90,
+			TrafficLogMaxFiles: 50,
 		},
 		QualityGuard: QualityGuardConfig{
 			Model: "grok-4.6", Mode: "hybrid",

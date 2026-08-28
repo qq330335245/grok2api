@@ -159,6 +159,7 @@ export const settingsSchema = z.object({
     commitDelayMS: positiveInteger.max(50),
     retentionDays: z.number().int().min(0).max(365),
     trafficLogEnabled: z.boolean(),
+    trafficLogMaxFiles: z.number().int().min(1).max(500),
   })
     .refine((value) => value.batchSize <= value.bufferSize, { path: ["batchSize"] }),
   clientKeyDefaults: z.object({ rpmLimit: positiveInteger.max(100_000), maxConcurrent: positiveInteger.max(1_024) }),
@@ -223,6 +224,7 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
       commitDelayMS: config.audit.commitDelayMS,
       retentionDays: config.audit.retentionDays ?? 7,
       trafficLogEnabled: config.audit.trafficLogEnabled ?? false,
+      trafficLogMaxFiles: config.audit.trafficLogMaxFiles && config.audit.trafficLogMaxFiles > 0 ? config.audit.trafficLogMaxFiles : 50,
     },
     clientKeyDefaults: config.clientKeyDefaults,
     accounts: {
@@ -273,6 +275,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
       commitDelayMS: config.audit.commitDelayMS,
       retentionDays: config.audit.retentionDays,
       trafficLogEnabled: config.audit.trafficLogEnabled,
+      trafficLogMaxFiles: config.audit.trafficLogMaxFiles,
     },
     clientKeyDefaults: config.clientKeyDefaults,
     accounts: {

@@ -116,12 +116,13 @@ type segmentedSelectorConfigDTO struct {
 }
 
 type auditConfigDTO struct {
-	BufferSize        int    `json:"bufferSize"`
-	BatchSize         int    `json:"batchSize"`
-	FlushInterval     string `json:"flushInterval"`
-	CommitDelayMS     int    `json:"commitDelayMS"`
-	RetentionDays     *int   `json:"retentionDays,omitempty"`
-	TrafficLogEnabled *bool  `json:"trafficLogEnabled,omitempty"`
+	BufferSize         int    `json:"bufferSize"`
+	BatchSize          int    `json:"batchSize"`
+	FlushInterval      string `json:"flushInterval"`
+	CommitDelayMS      int    `json:"commitDelayMS"`
+	RetentionDays      *int   `json:"retentionDays,omitempty"`
+	TrafficLogEnabled  *bool  `json:"trafficLogEnabled,omitempty"`
+	TrafficLogMaxFiles *int   `json:"trafficLogMaxFiles,omitempty"`
 }
 
 type clientKeyDefaultsConfigDTO struct {
@@ -237,6 +238,7 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: value.Audit.FlushInterval, CommitDelayMS: value.Audit.CommitDelayMS,
 			RetentionDays: intValue(value.Audit.RetentionDays), RetentionDaysProvided: value.Audit.RetentionDays != nil,
 			TrafficLogEnabled: boolValue(value.Audit.TrafficLogEnabled), TrafficLogEnabledProvided: value.Audit.TrafficLogEnabled != nil,
+			TrafficLogMaxFiles: intValue(value.Audit.TrafficLogMaxFiles), TrafficLogMaxFilesProvided: value.Audit.TrafficLogMaxFiles != nil,
 		},
 		ClientKeyDefaults: settingsapp.ClientKeyDefaultsConfig{
 			RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
@@ -321,8 +323,9 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 			},
 			Audit: auditConfigDTO{
 				BufferSize: config.Audit.BufferSize, BatchSize: config.Audit.BatchSize, FlushInterval: config.Audit.FlushInterval, CommitDelayMS: config.Audit.CommitDelayMS,
-				RetentionDays:     intPointer(config.Audit.RetentionDays),
-				TrafficLogEnabled: boolPointer(config.Audit.TrafficLogEnabled),
+				RetentionDays:      intPointer(config.Audit.RetentionDays),
+				TrafficLogEnabled:  boolPointer(config.Audit.TrafficLogEnabled),
+				TrafficLogMaxFiles: intPointer(config.Audit.TrafficLogMaxFiles),
 			},
 			ClientKeyDefaults: clientKeyDefaultsConfigDTO{
 				RPMLimit: config.ClientKeyDefaults.RPMLimit, MaxConcurrent: config.ClientKeyDefaults.MaxConcurrent,

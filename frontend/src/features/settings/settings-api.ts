@@ -24,7 +24,7 @@ export type SettingsConfigDTO = {
     accountIsolatedConnections: boolean;
     segmentedSelector: { enabled: boolean; minCandidates: number; windowSize: number };
   };
-  audit: { bufferSize: number; batchSize: number; flushInterval: string; commitDelayMS: number; retentionDays?: number; trafficLogEnabled?: boolean };
+  audit: { bufferSize: number; batchSize: number; flushInterval: string; commitDelayMS: number; retentionDays?: number; trafficLogEnabled?: boolean; trafficLogMaxFiles?: number };
   clientKeyDefaults: { rpmLimit: number; maxConcurrent: number };
   accounts: {
     markBuildForbiddenReauth: boolean;
@@ -134,7 +134,7 @@ const settingsConfigValidator = hasShape({
   }),
   audit: hasShape({
     bufferSize: isNumber, batchSize: isNumber, flushInterval: isString, commitDelayMS: isOptional(isNumber),
-    retentionDays: isOptional(isNumber), trafficLogEnabled: isOptional(isBoolean),
+    retentionDays: isOptional(isNumber), trafficLogEnabled: isOptional(isBoolean), trafficLogMaxFiles: isOptional(isNumber),
   }),
   clientKeyDefaults: hasShape({ rpmLimit: isNumber, maxConcurrent: isNumber }),
   // Older backends may omit accounts; withSettingsDefaults supplies a safe local default.
@@ -177,6 +177,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         commitDelayMS: snapshot.config.audit.commitDelayMS ?? 5,
         retentionDays: snapshot.config.audit.retentionDays ?? 7,
         trafficLogEnabled: snapshot.config.audit.trafficLogEnabled ?? false,
+        trafficLogMaxFiles: snapshot.config.audit.trafficLogMaxFiles && snapshot.config.audit.trafficLogMaxFiles > 0 ? snapshot.config.audit.trafficLogMaxFiles : 50,
       },
       routing: {
         ...snapshot.config.routing,

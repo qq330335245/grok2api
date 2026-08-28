@@ -1,12 +1,14 @@
 package trafficlog
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStartDisabledReturnsNil(t *testing.T) {
@@ -60,5 +62,26 @@ func TestSessionRedactsSecretsAndCapturesBody(t *testing.T) {
 	matches, _ := filepath.Glob(filepath.Join(dir, "responses-*-req_1.log"))
 	if len(matches) != 1 {
 		t.Fatalf("files=%v", matches)
+	}
+}
+
+func TestStartPrunesOldestFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	rec := New(Config{Enabled: true, Directory: dir, MaxFiles: 2}, nil)
+	for i := 1; i <= 4; i++ {
+		session := rec.Start(SessionMeta{RequestID: fmt.Sprintf("req_%d", i), Operation: "responses"})
+		if session == nil {
+			t.Fatalf("start %d", i)
+		}
+		session.Close()
+		time.Sleep(5 * time.Millisecond)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "*.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("kept %d files, want 2: %v", len(matches), matches)
 	}
 }

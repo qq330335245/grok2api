@@ -20,6 +20,7 @@ import (
 const (
 	defaultDirectory       = "./data/traffic-logs"
 	defaultMaxBytes  int64 = 8 << 20
+	defaultMaxFiles        = 50
 	maxRequestBody   int64 = 512 << 10
 )
 
@@ -28,6 +29,7 @@ type Config struct {
 	Enabled   bool
 	Directory string
 	MaxBytes  int64
+	MaxFiles  int
 }
 
 // Recorder is a process-wide, hot-updatable dump switch.
@@ -50,6 +52,9 @@ func normalize(cfg Config) Config {
 	}
 	if cfg.MaxBytes <= 0 {
 		cfg.MaxBytes = defaultMaxBytes
+	}
+	if cfg.MaxFiles <= 0 {
+		cfg.MaxFiles = defaultMaxFiles
 	}
 	return cfg
 }
@@ -98,7 +103,42 @@ func (r *Recorder) Start(meta SessionMeta) *Session {
 	}
 	session.writeString(fmt.Sprintf("=== REQUEST INFO ===\nTimestamp: %s\nRequest-ID: %s\nMethod: %s\nPath: %s\nOperation: %s\nModel: %s\nStreaming: %v\nClient-Key: %s\n\n",
 		time.Now().Format(time.RFC3339Nano), meta.RequestID, meta.Method, meta.Path, meta.Operation, meta.Model, meta.Streaming, meta.ClientKeyName))
+	r.prune(cfg.Directory, cfg.MaxFiles)
 	return session
+}
+
+func (r *Recorder) prune(dir string, maxFiles int) {
+	if r == nil || maxFiles <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type item struct {
+		path string
+		mod  time.Time
+	}
+	logs := make([]item, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".log") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		logs = append(logs, item{path: filepath.Join(dir, entry.Name()), mod: info.ModTime()})
+	}
+	if len(logs) <= maxFiles {
+		return
+	}
+	sort.Slice(logs, func(i, j int) bool { return logs[i].mod.After(logs[j].mod) })
+	for _, old := range logs[maxFiles:] {
+		if removeErr := os.Remove(old.path); removeErr != nil && r.logger != nil {
+			r.logger.Warn("traffic_log_prune_failed", "path", old.path, "error", removeErr)
+		}
+	}
 }
 
 type SessionMeta struct {

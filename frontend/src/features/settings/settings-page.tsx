@@ -356,6 +356,9 @@ export function SettingsPage() {
                 <SettingsField controlId="audit-traffic-log" label={t("settings.audit.trafficLogEnabled")} description={t("settings.audit.trafficLogEnabledHelp")}>
                   <Controller control={form.control} name="audit.trafficLogEnabled" render={({ field }) => <div className="flex h-9 items-center"><Switch id="audit-traffic-log" checked={field.value} onCheckedChange={field.onChange} /></div>} />
                 </SettingsField>
+                <SettingsField controlId="audit-traffic-log-max-files" label={t("settings.audit.trafficLogMaxFiles")} description={t("settings.audit.trafficLogMaxFilesHelp")} error={form.formState.errors.audit?.trafficLogMaxFiles?.message}>
+                  <Input id="audit-traffic-log-max-files" type="number" min={1} max={500} {...form.register("audit.trafficLogMaxFiles", { valueAsNumber: true })} />
+                </SettingsField>
               </div>
             </SettingsSection>
             <SettingsSection title={t("settings.audit.retentionTitle")}>

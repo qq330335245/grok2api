@@ -128,7 +128,8 @@ type AuditConfig struct {
 	CommitDelay   time.Duration
 	RetentionDays *int
 	// TrafficLogEnabled is optional so older persisted payloads keep config.yaml.
-	TrafficLogEnabled *bool
+	TrafficLogEnabled  *bool
+	TrafficLogMaxFiles *int
 }
 
 // ClientKeyDefaultsConfig 定义新建客户端密钥的默认限制。
