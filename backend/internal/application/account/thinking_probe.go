@@ -196,13 +196,16 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 		}
 		identity := stickyProbeIdentity(value, attempt)
 		identities = append(identities, identity)
-		scan, status, probeErr := s.probeThinkingOnStickyIdentity(ctx, value, billing, identity)
+		scan, status, body, probeErr := s.probeThinkingOnStickyIdentity(ctx, value, billing, identity)
 		if status != 0 {
 			item.HTTPStatus = status
 		}
 		if probeErr != nil {
 			item.Reason = probeErr.Error()
 			return item
+		}
+		if quotaItem, ok := s.finishBotRiskQuotaRejection(ctx, value, billing, identity, status, body); ok {
+			return quotaItem
 		}
 		s.logger.Info("bot_risk_probe_attempt", "account_id", value.ID, "identity", identity, "status", status, "verdict", scan.verdict.String(), "event", scan.event, "delta", scan.delta)
 		switch scan.verdict {
@@ -236,10 +239,10 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 	return item
 }
 
-func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accountdomain.Credential, billing *accountdomain.Billing, identity string) (thinkingScan, int, error) {
+func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accountdomain.Credential, billing *accountdomain.Billing, identity string) (thinkingScan, int, []byte, error) {
 	adapter, ok := s.providers.Responses(accountdomain.ProviderBuild)
 	if !ok {
-		return thinkingScan{verdict: probeInconclusive}, 0, fmt.Errorf("Provider %s 未注册 Responses 能力", accountdomain.ProviderBuild)
+		return thinkingScan{verdict: probeInconclusive}, 0, nil, fmt.Errorf("Provider %s 未注册 Responses 能力", accountdomain.ProviderBuild)
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, botRiskAttemptTimeout)
 	defer cancel()
@@ -257,13 +260,49 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 		Streaming:     true,
 	})
 	if err != nil {
-		return thinkingScan{verdict: probeInconclusive}, 0, nil
+		return thinkingScan{verdict: probeInconclusive}, providerStatus(err), nil, nil
 	}
 	if response.Body != nil {
 		defer response.Body.Close()
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return thinkingScan{verdict: probeInconclusive}, response.StatusCode, nil
+		body := readDetectBodyForClassification(response.Body)
+		if len(body) == 0 && response.Diagnostic != nil {
+			body = response.Diagnostic.Body
+		}
+		return thinkingScan{verdict: probeInconclusive}, response.StatusCode, body, nil
 	}
-	return scanThinkingSSE(response.Body), response.StatusCode, nil
+	return scanThinkingSSE(response.Body), response.StatusCode, nil, nil
+}
+
+func providerStatus(err error) int {
+	status, _ := provider.ErrorHTTPStatus(err)
+	return status
+}
+
+func (s *Service) finishBotRiskQuotaRejection(ctx context.Context, value accountdomain.Credential, billing *accountdomain.Billing, identity string, status int, body []byte) (BuildDetectItemResult, bool) {
+	rejection := provider.ClassifyCredentialRejection(status, body, nil)
+	if !rejection.QuotaExhausted && !rejection.SpendingLimitBlocked && !rejection.ModelQuotaExhausted {
+		return BuildDetectItemResult{}, false
+	}
+	item := BuildDetectItemResult{AccountID: value.ID, Name: value.Name, Email: value.Email, Outcome: BuildDetectOutcomeFailed, HTTPStatus: status}
+	switch {
+	case rejection.SpendingLimitBlocked:
+		item.Reason = "消费限额已满"
+		if err := s.markBuildDetectQuotaExhausted(ctx, value, billing); err != nil {
+			item.Reason = err.Error()
+		}
+	case rejection.ModelQuotaExhausted:
+		item.Reason = fmt.Sprintf("模型 %s 额度已满", botRiskProbeModel)
+		if err := s.markBuildDetectModelQuotaExhausted(ctx, value, item.Reason); err != nil {
+			item.Reason = err.Error()
+		}
+	default:
+		item.Reason = "额度已满"
+		if err := s.markBuildDetectQuotaExhausted(ctx, value, billing); err != nil {
+			item.Reason = err.Error()
+		}
+	}
+	s.logger.Info("bot_risk_probe_quota", "account_id", value.ID, "identity", identity, "status", status, "reason", item.Reason)
+	return item, true
 }

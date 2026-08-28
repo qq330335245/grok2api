@@ -62,9 +62,11 @@ func TestScanThinkingSSEGoldStandard(t *testing.T) {
 }
 
 type scriptedThinkingAdapter struct {
-	mu    sync.Mutex
-	calls []string
-	sse   []string
+	mu      sync.Mutex
+	calls   []string
+	sse     []string
+	status  int
+	errBody []byte
 }
 
 func (a *scriptedThinkingAdapter) Provider() accountdomain.Provider {
@@ -74,6 +76,16 @@ func (a *scriptedThinkingAdapter) ForwardResponse(_ context.Context, request pro
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls = append(a.calls, request.Credential.EgressIdentity)
+	if a.status != 0 && a.status != http.StatusOK {
+		body := a.errBody
+		if body == nil {
+			body = []byte(`{}`)
+		}
+		return &provider.Response{
+			StatusCode: a.status,
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	}
 	body := ""
 	if len(a.sse) > 0 {
 		body = a.sse[0]
@@ -163,5 +175,55 @@ func TestInspectBuildBotRiskDoesNotNeedSSO(t *testing.T) {
 	}
 	if len(adapter.calls) != 1 {
 		t.Fatalf("inconclusive should stop without a second miss: %v", adapter.calls)
+	}
+}
+
+func TestInspectBuildBotRiskQuotaExhausted(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "bot-risk-quota.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessToken, err := cipher.Encrypt("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := relational.NewAccountRepository(database)
+	account, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
+		Provider: accountdomain.ProviderBuild, Name: "quota", UserID: "user-quota",
+		SourceKey: "bot-risk-quota", EncryptedAccessToken: accessToken,
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account.EgressIdentity = "sticky_acc"
+	adapter := &scriptedThinkingAdapter{
+		status:  http.StatusTooManyRequests,
+		errBody: []byte(`{"code":"subscription:free-usage-exhausted","error":"tokens (actual/limit): 10/10"}`),
+	}
+	service := NewService(repo, nil, nil, nil, provider.NewRegistry(adapter), cipher, nil)
+	item := service.inspectBuildBotRisk(ctx, account)
+	if item.Outcome != BuildDetectOutcomeFailed || item.BotFlagSource != 0 || item.Reason != "额度已满" {
+		t.Fatalf("quota item=%#v", item)
+	}
+	if len(adapter.calls) != 1 {
+		t.Fatalf("quota should stop after first attempt: %v", adapter.calls)
+	}
+	recovery, err := repo.GetQuotaRecovery(ctx, account.ID)
+	if err != nil || recovery.Kind != accountdomain.QuotaRecoveryKindFree || recovery.Status != accountdomain.QuotaRecoveryStatusExhausted {
+		t.Fatalf("quota recovery=%#v err=%v", recovery, err)
+	}
+	latest, err := repo.Get(ctx, account.ID)
+	if err != nil || latest.BuildBotFlagSource == 2 {
+		t.Fatalf("quota must not persist botflag=2: %#v err=%v", latest, err)
 	}
 }
