@@ -279,6 +279,9 @@ func TestSharedExitNodeCoolsAccountIPWithoutBlockingOthers(t *testing.T) {
 		t.Fatalf("degraded account must leave the cooled sticky IP, override=%d want 1", got)
 	}
 	snapshot := controller.Snapshot(context.Background())
+	if len(snapshot.IPs) == 0 {
+		t.Fatal("IP load must still list sticky occupancy")
+	}
 	for _, ip := range snapshot.IPs {
 		if ip.ExitIP == "2001:db8::probe" {
 			t.Fatalf("probe identity must not appear in IP load: %#v", ip)

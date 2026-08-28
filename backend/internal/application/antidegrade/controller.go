@@ -572,19 +572,35 @@ func (c *Controller) ClearForNode(ctx context.Context, nodeID uint64) {
 }
 
 func (c *Controller) ExitIP(ctx context.Context, nodeID uint64) string {
+	return c.ExitIPForAccount(ctx, nodeID, 0)
+}
+
+func (c *Controller) ExitIPForAccount(ctx context.Context, nodeID, accountID uint64) string {
 	if c == nil || nodeID == 0 {
 		return ""
 	}
-	var real string
+	var node Node
+	var ok bool
 	if nodes, err := c.lookup(ctx); err == nil {
-		if node, ok := c.nodeByID(nodes, nodeID); ok {
-			if key := exitKey(node); key != "" && !strings.HasPrefix(key, "node:") {
-				real = key
-			}
+		node, ok = c.nodeByID(nodes, nodeID)
+	}
+	if ok && node.SharedExit && accountID != 0 {
+		c.ledger.mu.Lock()
+		if known := c.ledger.accountIPOnNode(accountID, nodeID); known != "" && !strings.HasPrefix(known, "account:") {
+			c.ledger.mu.Unlock()
+			return known
+		}
+		c.ledger.mu.Unlock()
+		return fmt.Sprintf("account:%d:node:%d", accountID, nodeID)
+	}
+	var real string
+	if ok {
+		if key := exitKey(node); key != "" && !strings.HasPrefix(key, "node:") {
+			real = key
 		}
 	}
 	c.ledger.mu.Lock()
-	if real != "" {
+	if real != "" && !(ok && node.SharedExit) {
 		c.ledger.mergeIP(fmt.Sprintf("node:%d", nodeID), real, nodeID)
 		c.ledger.rememberNode(real, nodeID)
 		c.ledger.mu.Unlock()
@@ -593,7 +609,7 @@ func (c *Controller) ExitIP(ctx context.Context, nodeID uint64) string {
 	}
 	remembered := c.ledger.lastIPForNode(nodeID)
 	c.ledger.mu.Unlock()
-	if remembered != "" {
+	if remembered != "" && !(ok && node.SharedExit) {
 		return remembered
 	}
 	return fmt.Sprintf("node:%d", nodeID)

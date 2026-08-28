@@ -79,9 +79,6 @@ func (c *Controller) Snapshot(ctx context.Context) Status {
 		if state == nil {
 			continue
 		}
-		if strings.HasPrefix(key, "account:") {
-			continue
-		}
 		if _, probe := probeIPs[key]; probe {
 			continue
 		}
@@ -92,6 +89,28 @@ func (c *Controller) Snapshot(ctx context.Context) Status {
 			continue
 		}
 		ids := append([]uint64(nil), state.NodeIDs...)
+		if accID, nodeID, ok := parseAccountNodeKey(key); ok {
+			already := false
+			for _, existing := range ids {
+				if existing == nodeID {
+					already = true
+					break
+				}
+			}
+			if !already && nodeID != 0 {
+				ids = append(ids, nodeID)
+			}
+			hasAccount := false
+			for _, existing := range accountIDs {
+				if existing == accID {
+					hasAccount = true
+					break
+				}
+			}
+			if !hasAccount && accID != 0 {
+				accountIDs = append(accountIDs, accID)
+			}
+		}
 		if id, ok := parseNodeKey(key); ok {
 			already := false
 			for _, existing := range ids {

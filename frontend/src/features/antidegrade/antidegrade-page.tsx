@@ -241,7 +241,7 @@ function IPLoadRow({ ip, locale, onClear, clearing }: { ip: AntiDegradeIPDTO; lo
   const tone = ip.cooling ? "bg-muted-foreground/40" : ratio >= 1 ? "bg-destructive" : ratio >= 0.6 ? "bg-amber-500" : "bg-emerald-500";
   const badge = ip.operatorOverrideUntil ? t("antidegrade.override") : ip.cooling ? t("antidegrade.cooling") : ratio >= 1 ? t("antidegrade.full") : ratio >= 0.6 ? t("antidegrade.nearFull") : t("antidegrade.idle");
   const reason = ip.cooldownReason ? t(`antidegrade.reasons.${ip.cooldownReason}`, { defaultValue: ip.cooldownReason }) : "";
-  const title = ip.exitIp.startsWith("node:") && ip.nodeNames[0] ? ip.nodeNames[0] : ip.exitIp;
+  const title = (ip.exitIp.startsWith("node:") || ip.exitIp.startsWith("account:")) && ip.nodeNames[0] ? ip.nodeNames[0] : ip.exitIp;
   const names = ip.nodeNames.join(" · ") || (ip.nodeIds.length ? ip.nodeIds.map((id) => `#${id}`).join(" · ") : t("antidegrade.nodes"));
   return (
     <div className="border-b px-4 py-3 last:border-b-0 sm:px-5">

@@ -344,6 +344,27 @@ func (l *ledger) resetConsecutive(accountID uint64) {
 	l.dirty = true
 }
 
+func parseAccountNodeKey(key string) (accountID, nodeID uint64, ok bool) {
+	key = strings.TrimSpace(key)
+	if !strings.HasPrefix(key, "account:") {
+		return 0, 0, false
+	}
+	rest := strings.TrimPrefix(key, "account:")
+	parts := strings.Split(rest, ":node:")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	accountID, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil || accountID == 0 {
+		return 0, 0, false
+	}
+	nodeID, err = strconv.ParseUint(parts[1], 10, 64)
+	if err != nil || nodeID == 0 {
+		return 0, 0, false
+	}
+	return accountID, nodeID, true
+}
+
 func parseNodeKey(key string) (uint64, bool) {
 	key = strings.TrimSpace(key)
 	if !strings.HasPrefix(key, "node:") {

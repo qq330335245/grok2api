@@ -1101,7 +1101,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		if anti == nil || !anti.ActiveFor(credential.Provider) {
 			return
 		}
-		anti.OnMissingThinking(ctx, credential, usedNode, anti.ExitIP(ctx, usedNode))
+		anti.OnMissingThinking(ctx, credential, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
 		if !anti.AccountQuarantined(credential.ID) {
 			antiDegradePin = credential.ID
 			return
@@ -1741,7 +1741,7 @@ attemptLoop:
 						} else if anti != nil && anti.ActiveFor(credential.Provider) {
 							usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 							excludedEgressNodes[usedNode] = true
-							anti.OnIdleStream(credential, usedNode, anti.ExitIP(ctx, usedNode))
+							anti.OnIdleStream(credential, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
 							antiDegradePin = credential.ID
 							s.logger.Warn(logPrefix+"_ip_retry", "request_id", input.RequestID, "account_id", credential.ID, "node_id", usedNode, "quarantined", anti.AccountQuarantined(credential.ID))
 						}
@@ -1782,7 +1782,7 @@ attemptLoop:
 					}
 				} else if verdict == QualityDeliver && anti != nil && anti.Enabled() && anti.AppliesTo(credential.Provider) {
 					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
-					anti.OnSuccess(credential.ID, usedNode, anti.ExitIP(ctx, usedNode))
+					anti.OnSuccess(credential.ID, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
 				}
 				deferFailOpenAudit := commit.Action == QualityActionRetry && holdCfg.OnExhausted == qualityRetryFailOpen
 				if commit.Audit && !deferFailOpenAudit {
