@@ -43,6 +43,8 @@ export type AntiDegradeQuarantineDTO = {
   failedExitIps: string[];
   quarantineUntil: string;
   quarantineReason?: string;
+  consecutive?: number;
+  recidivism?: number;
 };
 
 export type AntiDegradeEventDTO = {
@@ -91,6 +93,7 @@ const decodeStatus = createObjectDecoder<AntiDegradeStatusDTO>("antidegrade stat
   quarantined: isArrayOf(hasShape({
     id: isString, name: isOptional(isString), failedExitIps: isArrayOf(isString),
     quarantineUntil: isString, quarantineReason: isOptional(isString),
+    consecutive: isOptional(isNumber), recidivism: isOptional(isNumber),
   })),
   events: isArrayOf(hasShape({
     at: isString, success: isBoolean, accountId: isOptional(isString),

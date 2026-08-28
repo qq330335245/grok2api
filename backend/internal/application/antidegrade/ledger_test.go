@@ -39,7 +39,7 @@ func TestCoolingHonorsOperatorOverride(t *testing.T) {
 	}
 }
 
-func TestAccountFailCountsDistinctIPs(t *testing.T) {
+func TestAccountFailCountsConsecutiveIPSwitches(t *testing.T) {
 	ledger := newLedger("")
 	now := time.Now().UTC()
 	if got := ledger.noteAccountFail(9, "1.1.1.1", now); got != 1 {
@@ -49,7 +49,11 @@ func TestAccountFailCountsDistinctIPs(t *testing.T) {
 		t.Fatalf("same ip = %d", got)
 	}
 	if got := ledger.noteAccountFail(9, "8.8.8.8", now.Add(2*time.Minute)); got != 2 {
-		t.Fatalf("second ip = %d", got)
+		t.Fatalf("switched ip = %d", got)
+	}
+	ledger.resetConsecutive(9)
+	if got := ledger.noteAccountFail(9, "9.9.9.9", now.Add(3*time.Minute)); got != 1 {
+		t.Fatalf("after success = %d", got)
 	}
 }
 
@@ -60,7 +64,7 @@ func TestQuarantineKeepsFirstIPAndLiftsRest(t *testing.T) {
 	ledger.cool("10.0.0.2", reasonDirtyIP, now.Add(30*time.Minute))
 	ledger.noteAccountFail(3, "10.0.0.1", now)
 	ledger.noteAccountFail(3, "10.0.0.2", now.Add(time.Minute))
-	lifted := ledger.quarantineAccount(3, now.Add(2*time.Hour), reasonQuarantine)
+	lifted := ledger.quarantineAccount(3, 2*time.Hour, reasonQuarantine, now)
 	if len(lifted) != 1 || lifted[0] != "10.0.0.2" {
 		t.Fatalf("lifted=%v", lifted)
 	}

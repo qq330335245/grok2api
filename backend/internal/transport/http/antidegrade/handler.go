@@ -38,16 +38,16 @@ type configDTO struct {
 	Mode                   string   `json:"mode"`
 	Providers              []string `json:"providers"`
 	ThinkingMinOutput      int      `json:"thinkingMinOutput"`
-	DensityWindow          string  `json:"densityWindow"`
-	DensityMaxAccounts     int     `json:"densityMaxAccounts"`
-	DirtyIPCooldown        string  `json:"dirtyIpCooldown"`
-	FarmIPCooldown         string  `json:"farmIpCooldown"`
-	MaxIPRetries           int     `json:"maxIpRetries"`
-	AccountIPFailThreshold int     `json:"failExitThreshold"`
-	AccountQuarantineTTL   string  `json:"accountQuarantineTtl"`
-	ScorePrior             float64 `json:"scorePrior"`
-	ExploreRatio           float64 `json:"exploreRatio"`
-	OperatorOverride       string  `json:"operatorOverride"`
+	DensityWindow          string   `json:"densityWindow"`
+	DensityMaxAccounts     int      `json:"densityMaxAccounts"`
+	DirtyIPCooldown        string   `json:"dirtyIpCooldown"`
+	FarmIPCooldown         string   `json:"farmIpCooldown"`
+	MaxIPRetries           int      `json:"maxIpRetries"`
+	AccountIPFailThreshold int      `json:"failExitThreshold"`
+	AccountQuarantineTTL   string   `json:"accountQuarantineTtl"`
+	ScorePrior             float64  `json:"scorePrior"`
+	ExploreRatio           float64  `json:"exploreRatio"`
+	OperatorOverride       string   `json:"operatorOverride"`
 }
 
 type accountRefDTO struct {
@@ -75,6 +75,8 @@ type quarantinedDTO struct {
 	FailedIPs        []string  `json:"failedExitIps"`
 	QuarantineUntil  time.Time `json:"quarantineUntil"`
 	QuarantineReason string    `json:"quarantineReason,omitempty"`
+	Consecutive      int       `json:"consecutive,omitempty"`
+	Recidivism       int       `json:"recidivism,omitempty"`
 }
 
 type eventDTO struct {
@@ -277,6 +279,7 @@ func quarantinedDTOs(values []antidegrade.AccountStatus, names map[uint64]string
 		result = append(result, quarantinedDTO{
 			ID: strconv.FormatUint(value.ID, 10), Name: names[value.ID], FailedIPs: value.FailedIPs,
 			QuarantineUntil: value.QuarantineUntil, QuarantineReason: value.QuarantineReason,
+			Consecutive: value.Consecutive, Recidivism: value.Recidivism,
 		})
 	}
 	return result

@@ -15,7 +15,7 @@ const (
 	reasonDirtyIP    = "dirty_ip"
 	reasonFarm       = "farm"
 	reasonDensity    = "density"
-	reasonQuarantine = "k_ip_no_streamed_thinking"
+	reasonQuarantine = "consecutive_ip_no_thinking"
 	priorWeight      = 5.0
 	maxWindowHits    = 256
 	maxEvents        = 80
@@ -48,6 +48,10 @@ type accountFail struct {
 	IPs              []ipFail  `json:"ips,omitempty"`
 	QuarantineUntil  time.Time `json:"quarantineUntil,omitempty"`
 	QuarantineReason string    `json:"quarantineReason,omitempty"`
+	Consecutive      int       `json:"consecutive,omitempty"`
+	LastFailIP       string    `json:"lastFailIp,omitempty"`
+	LastFailAt       time.Time `json:"lastFailAt,omitempty"`
+	Recidivism       int       `json:"recidivism,omitempty"`
 }
 
 type ipFail struct {
@@ -266,13 +270,30 @@ func (l *ledger) accountQuarantined(accountID uint64, now time.Time) bool {
 	return !current.QuarantineUntil.IsZero() && now.Before(current.QuarantineUntil)
 }
 
-func (l *ledger) quarantineAccount(accountID uint64, until time.Time, reason string) []string {
+func quarantineTTL(base time.Duration, recidivism int) time.Duration {
+	if base <= 0 {
+		base = 2 * time.Hour
+	}
+	if recidivism < 1 {
+		recidivism = 1
+	}
+	shift := recidivism - 1
+	if shift > 3 {
+		shift = 3
+	}
+	return base * time.Duration(1<<shift)
+}
+
+func (l *ledger) quarantineAccount(accountID uint64, baseTTL time.Duration, reason string, now time.Time) []string {
 	if accountID == 0 {
 		return nil
 	}
 	current := l.state.Accounts[accountID]
-	current.QuarantineUntil = until
+	current.Recidivism++
+	current.QuarantineUntil = now.Add(quarantineTTL(baseTTL, current.Recidivism))
 	current.QuarantineReason = reason
+	current.Consecutive = 0
+	current.LastFailIP = ""
 	lifted := make([]string, 0)
 	// Keep the first failed ExitIP cooled (may still be a dirty IP). Lift the
 	// later IPs that were only used to prove the failure follows the account.
@@ -298,6 +319,26 @@ func (l *ledger) clearAccountQuarantine(accountID uint64) {
 	}
 	current.QuarantineUntil = time.Time{}
 	current.QuarantineReason = ""
+	current.IPs = nil
+	current.Consecutive = 0
+	current.LastFailIP = ""
+	current.LastFailAt = time.Time{}
+	// Recidivism is the dossier: survive operator lift and TTL expiry.
+	l.state.Accounts[accountID] = current
+	l.dirty = true
+}
+
+func (l *ledger) resetConsecutive(accountID uint64) {
+	if accountID == 0 {
+		return
+	}
+	current, ok := l.state.Accounts[accountID]
+	if !ok {
+		return
+	}
+	current.Consecutive = 0
+	current.LastFailIP = ""
+	current.LastFailAt = time.Time{}
 	current.IPs = nil
 	l.state.Accounts[accountID] = current
 	l.dirty = true
@@ -485,6 +526,19 @@ func (l *ledger) noteAccountFail(accountID uint64, exitIP string, now time.Time)
 	}
 	current := l.state.Accounts[accountID]
 	cutoff := now.Add(-accountFailTTL)
+	streakExpired := current.LastFailAt.IsZero() || current.LastFailAt.Before(cutoff)
+	switch {
+	case streakExpired || current.LastFailIP == "":
+		current.Consecutive = 1
+		current.LastFailIP = exitIP
+		current.LastFailAt = now
+	case current.LastFailIP == exitIP:
+		current.LastFailAt = now
+	default:
+		current.Consecutive++
+		current.LastFailIP = exitIP
+		current.LastFailAt = now
+	}
 	kept := current.IPs[:0]
 	seen := map[string]struct{}{}
 	for _, item := range current.IPs {
@@ -504,7 +558,7 @@ func (l *ledger) noteAccountFail(accountID uint64, exitIP string, now time.Time)
 	current.IPs = kept
 	l.state.Accounts[accountID] = current
 	l.dirty = true
-	return len(seen)
+	return current.Consecutive
 }
 
 func (l *ledger) distinctFailCount(accountID uint64, now time.Time) int {

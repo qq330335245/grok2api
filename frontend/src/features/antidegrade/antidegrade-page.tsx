@@ -292,6 +292,7 @@ function QuarantinePanel({ status, locale, clearing, onClear }: { status: AntiDe
               <TableRow>
                 <TableHead>{t("antidegrade.accounts")}</TableHead>
                 <TableHead>{t("antidegrade.failedIps")}</TableHead>
+                <TableHead>{t("antidegrade.recidivism")}</TableHead>
                 <TableHead>{t("antidegrade.cooldown")}</TableHead>
                 <TableHead />
               </TableRow>
@@ -303,6 +304,7 @@ function QuarantinePanel({ status, locale, clearing, onClear }: { status: AntiDe
                     <Link className="text-sm hover:underline" to="/accounts">{account.name || account.id}</Link>
                   </TableCell>
                   <TableCell className="font-mono text-xs">{account.failedExitIps.join(", ") || "—"}</TableCell>
+                  <TableCell className="text-xs">{account.recidivism ?? 0}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{t("antidegrade.until", { time: formatDateTime(account.quarantineUntil, locale) })}</TableCell>
                   <TableCell className="text-right">
                     <Button size="sm" variant="secondary" disabled={clearing} onClick={() => onClear(account.id)}>

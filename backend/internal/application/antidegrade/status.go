@@ -37,6 +37,8 @@ type AccountStatus struct {
 	FailedIPs        []string
 	QuarantineUntil  time.Time
 	QuarantineReason string
+	Consecutive      int
+	Recidivism       int
 }
 
 type EventStatus struct {
@@ -145,6 +147,7 @@ func (c *Controller) Snapshot(ctx context.Context) Status {
 		}
 		quarantined = append(quarantined, AccountStatus{
 			ID: id, FailedIPs: failed, QuarantineUntil: current.QuarantineUntil, QuarantineReason: current.QuarantineReason,
+			Consecutive: current.Consecutive, Recidivism: current.Recidivism,
 		})
 	}
 	status := Status{Config: cfg, IPs: ips, Quarantined: quarantined, Events: events}

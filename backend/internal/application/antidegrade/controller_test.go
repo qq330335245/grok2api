@@ -131,6 +131,59 @@ func TestMissingThinkingQuarantinesAndKeepsFirstIPCool(t *testing.T) {
 	}
 }
 
+func TestSameIPMissesDoNotQuarantine(t *testing.T) {
+	nodes := staticNodes{{ID: 1, Enabled: true, ExitIP: "10.0.0.1"}, {ID: 2, Enabled: true, ExitIP: "10.0.0.2"}}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, AccountIPFailThreshold: 2, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	cred := accountdomain.Credential{ID: 11, Provider: accountdomain.ProviderBuild}
+	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
+	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
+	if controller.AccountQuarantined(11) {
+		t.Fatal("same ExitIP misses must not quarantine the account")
+	}
+}
+
+func TestThinkingSuccessResetsConsecutiveMisses(t *testing.T) {
+	nodes := staticNodes{{ID: 1, Enabled: true, ExitIP: "10.0.0.1"}, {ID: 2, Enabled: true, ExitIP: "10.0.0.2"}}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, AccountIPFailThreshold: 2, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	cred := accountdomain.Credential{ID: 12, Provider: accountdomain.ProviderBuild}
+	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
+	controller.OnSuccess(12, 2, "10.0.0.2")
+	controller.OnMissingThinking(context.Background(), cred, 2, "10.0.0.2")
+	if controller.AccountQuarantined(12) {
+		t.Fatal("a streamed-thinking success must reset the consecutive streak")
+	}
+}
+
+func TestRecidivismLengthensQuarantineAfterRelease(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	nodes := staticNodes{{ID: 1, Enabled: true, ExitIP: "10.0.0.1"}, {ID: 2, Enabled: true, ExitIP: "10.0.0.2"}}
+	controller := New(Config{
+		Enabled: true, Mode: ModeEnforce, AccountIPFailThreshold: 2,
+		AccountQuarantineTTL: 2 * time.Hour, StateFile: t.TempDir() + "/l.json",
+	}, nodes, nil, nil)
+	controller.ledger.now = func() time.Time { return now }
+	cred := accountdomain.Credential{ID: 13, Provider: accountdomain.ProviderBuild}
+	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
+	controller.OnMissingThinking(context.Background(), cred, 2, "10.0.0.2")
+	firstUntil := controller.ledger.state.Accounts[13].QuarantineUntil
+	if !firstUntil.Equal(now.Add(2 * time.Hour)) {
+		t.Fatalf("first quarantine until %s", firstUntil)
+	}
+	controller.ClearAccount(context.Background(), 13)
+	if controller.ledger.state.Accounts[13].Recidivism != 1 {
+		t.Fatalf("dossier recidivism=%d", controller.ledger.state.Accounts[13].Recidivism)
+	}
+	controller.OnMissingThinking(context.Background(), cred, 1, "10.0.0.1")
+	if controller.AccountQuarantined(13) {
+		t.Fatal("cleared consecutive streak must start over")
+	}
+	controller.OnMissingThinking(context.Background(), cred, 2, "10.0.0.2")
+	secondUntil := controller.ledger.state.Accounts[13].QuarantineUntil
+	if !secondUntil.Equal(now.Add(4 * time.Hour)) {
+		t.Fatalf("second quarantine until %s, want +4h", secondUntil)
+	}
+}
+
 func TestExitIPRemembersLastProbeWhenNodeIPEmpty(t *testing.T) {
 	nodes := staticNodes{{ID: 9, Enabled: true, ExitIP: "51.75.118.79"}}
 	controller := New(Config{Enabled: true, Mode: ModeEnforce, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)

@@ -369,6 +369,7 @@ func (c *Controller) OnSuccess(accountID, nodeID uint64, exitIP string) {
 	c.ledger.rememberNode(key, nodeID)
 	c.ledger.noteWindow(key, accountID, cfg.DensityWindow, now)
 	c.ledger.recordEvent(key, accountID, true, now)
+	c.ledger.resetConsecutive(accountID)
 	c.ledger.mu.Unlock()
 	_ = c.ledger.persist()
 }
@@ -411,24 +412,27 @@ func (c *Controller) OnMissingThinking(ctx context.Context, credential accountdo
 	c.ledger.rememberNode(key, nodeID)
 	c.ledger.noteWindow(key, credential.ID, cfg.DensityWindow, now)
 	c.ledger.recordEvent(key, credential.ID, false, now)
-	distinct := 0
+	streak := 0
+	recidivism := 0
 	promoted := false
 	lifted := []string(nil)
 	if cfg.Enforce() {
 		if already {
-			distinct = c.ledger.distinctFailCount(credential.ID, now)
+			streak = c.ledger.state.Accounts[credential.ID].Consecutive
+			recidivism = c.ledger.state.Accounts[credential.ID].Recidivism
 		} else {
 			c.coolDirtyLocked(key, nodeID, now.Add(cfg.DirtyIPCooldown))
-			distinct = c.ledger.noteAccountFail(credential.ID, key, now)
-			if distinct >= cfg.AccountIPFailThreshold {
-				lifted = c.ledger.quarantineAccount(credential.ID, now.Add(cfg.AccountQuarantineTTL), reasonQuarantine)
+			streak = c.ledger.noteAccountFail(credential.ID, key, now)
+			if streak >= cfg.AccountIPFailThreshold {
+				lifted = c.ledger.quarantineAccount(credential.ID, cfg.AccountQuarantineTTL, reasonQuarantine, now)
+				recidivism = c.ledger.state.Accounts[credential.ID].Recidivism
 				promoted = true
 			}
 		}
 	}
 	c.ledger.mu.Unlock()
 	_ = c.ledger.persist()
-	c.logger.Info("antidegrade_missing_thinking", "account_id", credential.ID, "node_id", nodeID, "exit_ip", key, "distinct_fail_ips", distinct, "quarantined", already || promoted, "lifted_ips", lifted)
+	c.logger.Info("antidegrade_missing_thinking", "account_id", credential.ID, "node_id", nodeID, "exit_ip", key, "consecutive", streak, "recidivism", recidivism, "quarantined", already || promoted, "lifted_ips", lifted)
 	if !promoted {
 		return
 	}
