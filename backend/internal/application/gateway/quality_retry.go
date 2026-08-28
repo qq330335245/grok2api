@@ -120,47 +120,17 @@ func (s *Service) qualityRetryConfig() QualityRetryRuntime {
 }
 
 // ClassifyQualityHold decides whether a held stream may be forwarded.
-// Only client-visible thinking text counts (reasoning_content / summary or
-// reasoning_text deltas). Usage.reasoning_tokens, empty reasoning items, and
-// encrypted_content alone do not — Cherry/Pi cannot see those, and degraded
-// accounts still fill usage. A finished or expired sample with enough visible
-// output and no streamed thinking is withheld so anti-degrade can retry the
-// same account on another ExitIP.
-// Short replies below minOutput are delivered so "ok"/"yes" is not retried.
-// A hold timeout with no visible output keeps waiting for more bytes or abort.
-func ClassifyQualityHold(sig QualityStreamSignals, minOutput int64) QualityVerdict {
-	if minOutput <= 0 {
-		minOutput = defaultQualityMinOutput
-	}
+// Thinking always precedes the answer. The only gold standard is streamed
+// reasoning_content / reasoning_text.delta / thinking_content (HasThinking).
+// The first visible content delta is the decision point: if thinking already
+// appeared, deliver; if not, withhold immediately. Usage.reasoning_tokens and
+// usage.output_tokens are ignored — degraded accounts still fill those at EOF.
+func ClassifyQualityHold(sig QualityStreamSignals, _ int64) QualityVerdict {
 	if sig.HasThinking {
 		return QualityDeliver
 	}
-	// Prefer observed/derived visible output. Total output includes reasoning
-	// tokens, which are deliberately not trusted as quality evidence above. If
-	// the stream exposed no visible count at all, retain OutputTokens as a
-	// compatibility fallback for terminal usage-only responses.
-	output := sig.VisibleTokens
-	if output <= 0 {
-		output = sig.OutputTokens
-	}
-	enough := output >= minOutput
-	if sig.Terminal {
-		if output <= 0 {
-			return QualityWait
-		}
-		if enough {
-			return QualityWithhold
-		}
-		return QualityDeliver
-	}
-	if enough {
+	if sig.VisibleTokens > 0 {
 		return QualityWithhold
-	}
-	if sig.HoldExpired {
-		if output <= 0 {
-			return QualityWait
-		}
-		return QualityDeliver
 	}
 	return QualityWait
 }

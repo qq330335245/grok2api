@@ -1298,7 +1298,22 @@ attemptLoop:
 			}
 		}
 		timing.markSelection(time.Since(selectionStarted))
-		if err != nil {
+				if err != nil {
+			if antiDegradePin != 0 {
+				reason := ""
+				var retryAfter time.Duration
+				var unavailable *SelectionUnavailableError
+				if errors.As(err, &unavailable) && unavailable != nil {
+					reason = string(unavailable.Reason)
+					retryAfter = unavailable.RetryAfter
+				}
+				s.logger.Warn("antidegrade_pin_acquire_failed", "request_id", input.RequestID, "account_id", antiDegradePin, "error", err, "reason", reason, "retry_after", retryAfter.Round(time.Millisecond))
+				antiDegradePin = 0
+				if attempt > 0 {
+					attempt--
+				}
+				continue
+			}
 			if lastFailure == nil {
 				lastErr = err
 			}

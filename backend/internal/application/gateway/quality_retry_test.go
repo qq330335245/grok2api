@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
+	"github.com/chenyme/grok2api/backend/internal/application/antidegrade"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
@@ -23,6 +26,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
 func TestClassifyQualityHold(t *testing.T) {
@@ -33,21 +37,17 @@ func TestClassifyQualityHold(t *testing.T) {
 		want QualityVerdict
 	}{
 		{name: "thinking delivers", sig: QualityStreamSignals{HasThinking: true, VisibleTokens: 10}, want: QualityDeliver},
-		{name: "usage reasoning tokens alone withhold", sig: QualityStreamSignals{ReasoningTokens: 40, VisibleTokens: 80, Terminal: true}, want: QualityWithhold},
-		{name: "visible 32 no think withhold", sig: QualityStreamSignals{VisibleTokens: 32, Terminal: true}, want: QualityWithhold},
-		{name: "output 40 no think withhold", sig: QualityStreamSignals{OutputTokens: 40, Terminal: true}, want: QualityWithhold},
-		{name: "short visible output ignores inflated total", sig: QualityStreamSignals{VisibleTokens: 1, OutputTokens: 80, Terminal: true}, want: QualityDeliver},
-		{name: "short no think delivers", sig: QualityStreamSignals{VisibleTokens: 10, Terminal: true}, want: QualityDeliver},
-		{name: "empty terminal waits for transport handling", sig: QualityStreamSignals{Terminal: true}, want: QualityWait},
-		{name: "midstream enough content withhold", sig: QualityStreamSignals{VisibleTokens: 64}, want: QualityWithhold},
-		{name: "stub midstream enough withholds", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64}, want: QualityWithhold},
-		{name: "stub hold expiry with visible withholds", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64, HoldExpired: true}, want: QualityWithhold},
-		{name: "stub-only hold expiry keeps waiting", sig: QualityStreamSignals{ReasoningStarted: true, HoldExpired: true}, want: QualityWait},
-		{name: "stub terminal enough withhold", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64, Terminal: true}, want: QualityWithhold},
-		{name: "wait for more", sig: QualityStreamSignals{VisibleTokens: 8}, want: QualityWait},
-		{name: "hold expired short delivers", sig: QualityStreamSignals{VisibleTokens: 8, HoldExpired: true}, want: QualityDeliver},
-		{name: "hold expired empty waits", sig: QualityStreamSignals{HoldExpired: true}, want: QualityWait},
-		{name: "hold expired zero tokens waits", sig: QualityStreamSignals{VisibleTokens: 0, OutputTokens: 0, HoldExpired: true}, want: QualityWait},
+		{name: "thinking before content delivers", sig: QualityStreamSignals{HasThinking: true, VisibleTokens: 1}, want: QualityDeliver},
+		{name: "usage reasoning tokens alone wait", sig: QualityStreamSignals{ReasoningTokens: 40, OutputTokens: 80, Terminal: true}, want: QualityWait},
+		{name: "first content no think withhold", sig: QualityStreamSignals{VisibleTokens: 1}, want: QualityWithhold},
+		{name: "visible no think withhold", sig: QualityStreamSignals{VisibleTokens: 32, Terminal: true}, want: QualityWithhold},
+		{name: "output usage only waits", sig: QualityStreamSignals{OutputTokens: 40, Terminal: true}, want: QualityWait},
+		{name: "short content ignores inflated usage", sig: QualityStreamSignals{VisibleTokens: 1, OutputTokens: 80, Terminal: true}, want: QualityWithhold},
+		{name: "empty terminal waits", sig: QualityStreamSignals{Terminal: true}, want: QualityWait},
+		{name: "stub without content waits", sig: QualityStreamSignals{ReasoningStarted: true}, want: QualityWait},
+		{name: "stub then content withhold", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 1}, want: QualityWithhold},
+		{name: "hold expired without content waits", sig: QualityStreamSignals{HoldExpired: true}, want: QualityWait},
+		{name: "hold expired with content withhold", sig: QualityStreamSignals{VisibleTokens: 8, HoldExpired: true}, want: QualityWithhold},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -317,8 +317,8 @@ func TestObserveQualityChunkShortNoThink(t *testing.T) {
 		"data: [DONE]",
 	)))
 	sig := state.signals()
-	if ClassifyQualityHold(sig, 32) != QualityDeliver {
-		t.Fatalf("short no-think should deliver, got %s (%#v)", ClassifyQualityHold(sig, 32), sig)
+	if ClassifyQualityHold(sig, 32) != QualityWithhold {
+		t.Fatalf("first content without reasoning_content must withhold, got %s (%#v)", ClassifyQualityHold(sig, 32), sig)
 	}
 }
 
@@ -335,8 +335,8 @@ func TestObserveQualityChunkShortNoThinkIgnoresFakeReasoningUsage(t *testing.T) 
 	if sig.VisibleTokens >= 32 || sig.OutputTokens != 80 || sig.ReasoningTokens != 79 {
 		t.Fatalf("fake-usage short reply signals = %#v", sig)
 	}
-	if got := ClassifyQualityHold(sig, 32); got != QualityDeliver {
-		t.Fatalf("short visible reply must not be withheld by inflated usage: %s (%#v)", got, sig)
+	if got := ClassifyQualityHold(sig, 32); got != QualityWithhold {
+		t.Fatalf("content without reasoning_content must withhold even with fake usage: %s (%#v)", got, sig)
 	}
 }
 
@@ -608,8 +608,8 @@ func TestPeekQualityStreamShortDelivers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer replay.Close()
-	if verdict != QualityDeliver {
-		t.Fatalf("short verdict=%s", verdict)
+	if verdict != QualityWithhold {
+		t.Fatalf("first content without thinking verdict=%s", verdict)
 	}
 }
 
@@ -646,11 +646,11 @@ func TestPeekQualityStreamHoldTimeoutInterruptsBlockedReadAndPreservesRemainder(
 	}
 	defer replay.Close()
 	close(continueWrite)
-	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed > 200*time.Millisecond {
-		t.Fatalf("peek returned after %s, want the 30ms hold timeout", elapsed)
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("peek returned after %s, want first-content withhold without waiting for hold timeout", elapsed)
 	}
-	if verdict != QualityDeliver {
-		t.Fatalf("short timed-out response verdict = %s", verdict)
+	if verdict != QualityWithhold {
+		t.Fatalf("first content without thinking verdict = %s", verdict)
 	}
 	body, err := io.ReadAll(replay)
 	if err != nil {
@@ -940,7 +940,7 @@ func TestPeekQualityStreamTerminalSemanticOutputIsNotEmpty(t *testing.T) {
 				`data: {"type":"response.output_text.delta","delta":"`+shortText+`"}`,
 				`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":"`+shortText+`"}]}]}}`,
 			),
-			wantVerdict: QualityDeliver,
+			wantVerdict: QualityWithhold,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -988,8 +988,8 @@ func TestPeekQualityStreamProcessesUnterminatedFinalEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer replay.Close()
-	if verdict != QualityDeliver {
-		t.Fatalf("verdict = %s, want deliver for a real short response", verdict)
+	if verdict != QualityWithhold {
+		t.Fatalf("verdict = %s, want withhold for content without reasoning", verdict)
 	}
 }
 
@@ -1475,5 +1475,133 @@ func TestNormalizeQualityRetryDefaults(t *testing.T) {
 	got := normalizeQualityRetry(QualityRetryRuntime{Enabled: true})
 	if !got.Enabled || got.MaxAttempts != 6 || got.MinOutputTokens != 8 || got.OnExhausted != qualityRetryFailClosed || got.HoldTimeout != 30*time.Second || got.AccountCooldown != 12*time.Hour || got.IdleAccountCooldown != 15*time.Minute {
 		t.Fatalf("defaults = %#v", got)
+	}
+}
+
+type testBuildNodes []antidegrade.Node
+
+func (s testBuildNodes) ListBuildNodes(context.Context) ([]antidegrade.Node, error) { return s, nil }
+
+type noopAccountDisabler struct{}
+
+func (noopAccountDisabler) Disable(context.Context, uint64) error { return nil }
+
+// rejectSecondAccountAcquire lets the first lease of key succeed, then reports
+// saturation so AcquirePinnedForKey fails immediately (CapacityWait=0).
+type rejectSecondAccountAcquire struct {
+	inner *memory.ConcurrencyLimiter
+	key   string
+	seen  atomic.Int64
+}
+
+func (l *rejectSecondAccountAcquire) Acquire(ctx context.Context, key string, limit int) (func(), bool, error) {
+	if key == l.key && l.seen.Add(1) > 1 {
+		return nil, false, nil
+	}
+	return l.inner.Acquire(ctx, key, limit)
+}
+
+func (l *rejectSecondAccountAcquire) Current(ctx context.Context, key string) (int, error) {
+	return l.inner.Current(ctx, key)
+}
+
+func TestAttemptLoopAntiDegradePinAcquireFailureFailsOver(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "antidegrade-pin-fail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountRepo := relational.NewAccountRepository(database)
+	modelRepo := relational.NewModelRepository(database)
+	auditRepo := relational.NewAuditRepository(database)
+	responseRepo := relational.NewResponseRepository(database)
+	keyRepo := relational.NewClientKeyRepository(database)
+
+	first, _, err := accountRepo.UpsertByIdentity(ctx, accountdomain.Credential{
+		Provider: accountdomain.ProviderBuild, Name: "pin-fail-a", SourceKey: "pin-fail-a",
+		EncryptedAccessToken: "pin-fail-a", EncryptedRefreshToken: "refresh-a",
+		ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
+		Priority: 200, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := accountRepo.UpsertByIdentity(ctx, accountdomain.Credential{
+		Provider: accountdomain.ProviderBuild, Name: "pin-fail-b", SourceKey: "pin-fail-b",
+		EncryptedAccessToken: "pin-fail-b", EncryptedRefreshToken: "refresh-b",
+		ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
+		Priority: 100, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.UpsertDiscovered(ctx, accountdomain.ProviderBuild, []string{"grok-4.6"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, credential := range []accountdomain.Credential{first, second} {
+		if err := modelRepo.ReplaceAccountCapabilities(ctx, credential.ID, []string{"grok-4.6"}, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clientKey, err := keyRepo.Create(ctx, clientkey.Key{
+		Name: "pin-fail-key", Prefix: "qpin", SecretHash: strings.Repeat("c", 64), EncryptedSecret: "encrypted",
+		Enabled: true, RPMLimit: 120, MaxConcurrent: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	noThink := sse(
+		`data: {"choices":[{"delta":{"content":"degraded answer"}}]}`,
+		"data: [DONE]",
+	)
+	thinking := sse(
+		`data: {"choices":[{"delta":{"reasoning_content":"plan"}}]}`,
+		`data: {"choices":[{"delta":{"content":"good after pin fail"}}]}`,
+		"data: [DONE]",
+	)
+	adapter := &scriptedBuildAdapter{responses: map[uint64][]scriptedBuildResponse{
+		first.ID:  {{status: http.StatusOK, body: noThink}},
+		second.ID: {{status: http.StatusOK, body: thinking}},
+	}}
+	registry := provider.NewRegistry(adapter)
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+	limiter := &rejectSecondAccountAcquire{inner: memory.NewConcurrencyLimiter(), key: repository.AccountConcurrencyKey(first.ID)}
+	selector := NewSelector(accountRepo, limiter, sticky, registry, time.Hour, time.Second, time.Minute)
+	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(nil, nil, nil, 60, 4, nil), registry, selector, responseRepo, 3)
+	controller := antidegrade.New(antidegrade.Config{
+		Enabled: true, Mode: antidegrade.ModeEnforce, Providers: []string{"grok_build"},
+		AccountIPFailThreshold: 8, MaxIPRetries: 8, DensityMaxAccounts: 10,
+		StateFile: filepath.Join(t.TempDir(), "antidegrade-pin-fail.json"),
+	}, testBuildNodes{
+		{ID: 1, Enabled: true, ExitIP: "10.0.0.1", Scope: "grok_build"},
+		{ID: 2, Enabled: true, ExitIP: "10.0.0.2", Scope: "grok_build"},
+	}, noopAccountDisabler{}, slog.Default())
+	service.SetAntiDegrade(controller)
+
+	result, err := service.CreateChatCompletion(ctx, Input{
+		RequestID: "req-antidegrade-pin-fail", ClientKey: clientKey, PublicModel: "grok-4.6", Streaming: true,
+		Body: []byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"write a game"}],"stream":true}`),
+	})
+	if err != nil {
+		t.Fatalf("pin acquire failure must fail over to another account, err=%v", err)
+	}
+	defer result.Body.Close()
+	body, _ := io.ReadAll(result.Body)
+	result.Finalize(Usage{Reported: true, OutputTokens: 8, ReasoningTokens: 4, StreamedThinking: true}, "chat-pin-fail", "")
+	if !strings.Contains(string(body), "good after pin fail") {
+		t.Fatalf("client must receive the failover thinking body, got %s", body)
+	}
+	if strings.Contains(string(body), "degraded answer") {
+		t.Fatal("withheld first body must not be delivered")
+	}
+	attempts := adapter.Attempts()
+	if len(attempts) != 2 || attempts[0] != first.ID || attempts[1] != second.ID {
+		t.Fatalf("expected first account then failover, attempts=%#v", attempts)
 	}
 }

@@ -131,19 +131,13 @@ func qualityProtocolForOperation(operation audit.Operation) string {
 func (s *qualityScanState) signals() QualityStreamSignals {
 	visibleRunes := max(s.visibleRunes, s.aggregateRunes)
 	visible := int64((visibleRunes + 3) / 4)
-	if s.usage.Reported {
-		fromUsage := s.usage.OutputTokens - s.usage.ReasoningTokens
-		if fromUsage > visible {
-			visible = fromUsage
-		}
-	}
 	output := s.outputTokens
 	if s.usage.Reported && s.usage.OutputTokens > output {
 		output = s.usage.OutputTokens
 	}
-	// Usage.reasoning_tokens is not proof of thinking. 降智 accounts report
-	// hundreds of reasoning tokens on completed while the stream never sent
-	// reasoning_text / reasoning_summary deltas (TUI shows no thoughts).
+	// VisibleTokens is streamed content only (delta.content / output_text.delta).
+	// Do not fold usage.output_tokens - reasoning_tokens into visible: that value
+	// arrives at EOF and would force hold to wait for the whole degraded reply.
 	return QualityStreamSignals{
 		HasThinking:      s.hasThinking,
 		ReasoningStarted: s.reasoningStarted || s.hasThinking,
