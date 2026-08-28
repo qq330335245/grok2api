@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Network, Pencil, RefreshCw, ShieldCheck, ShieldX, TimerReset } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Activity, ChevronDown, Network, Pencil, RefreshCw, ShieldCheck, ShieldX, TimerReset } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -217,60 +217,176 @@ function PolicyCard({ config, onEdit }: { config: AntiDegradeConfigDTO; onEdit: 
   );
 }
 
+type LoadFilter = "all" | "cooling" | "full" | "ok";
+
+function isFullIP(ip: AntiDegradeIPDTO) {
+  return !ip.cooling && ip.accountCount >= Math.max(ip.accountLimit, 1);
+}
+
+function isStickyIP(ip: AntiDegradeIPDTO) {
+  return ip.exitIp.startsWith("account:") || ip.exitIp.startsWith("node:");
+}
+
+function nodeGroupKey(ip: AntiDegradeIPDTO) {
+  if (ip.nodeIds[0]) return `node:${ip.nodeIds[0]}`;
+  if (ip.nodeNames[0]) return `name:${ip.nodeNames[0]}`;
+  return `ip:${ip.exitIp}`;
+}
+
+function nodeGroupTitle(ip: AntiDegradeIPDTO, fallback: string) {
+  return ip.nodeNames[0] || (ip.nodeIds[0] ? `#${ip.nodeIds[0]}` : fallback);
+}
+
+function matchesLoadFilter(ip: AntiDegradeIPDTO, filter: LoadFilter) {
+  if (filter === "cooling") return ip.cooling;
+  if (filter === "full") return isFullIP(ip);
+  if (filter === "ok") return !ip.cooling && !isFullIP(ip);
+  return true;
+}
+
+function ipStatusLabel(ip: AntiDegradeIPDTO, t: (key: string) => string) {
+  if (ip.operatorOverrideUntil) return t("antidegrade.override");
+  if (ip.cooling) return t("antidegrade.cooling");
+  if (isFullIP(ip)) return t("antidegrade.full");
+  if (ip.accountCount / Math.max(ip.accountLimit, 1) >= 0.6) return t("antidegrade.nearFull");
+  return t("antidegrade.idle");
+}
+
+function ipStatusClass(ip: AntiDegradeIPDTO) {
+  if (ip.cooling || ip.operatorOverrideUntil) return "text-muted-foreground";
+  if (isFullIP(ip)) return "text-destructive";
+  if (ip.accountCount / Math.max(ip.accountLimit, 1) >= 0.6) return "text-amber-700 dark:text-amber-400";
+  return "text-emerald-600 dark:text-emerald-400";
+}
+
 function IPLoadPanel({ ips, locale, onClear, clearing }: { ips: AntiDegradeIPDTO[]; locale: string; onClear: (exitIp: string) => void; clearing: boolean }) {
   const { t } = useTranslation();
+  const [filter, setFilter] = useState<LoadFilter>("all");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const coolingCount = ips.filter((ip) => ip.cooling).length;
+  const fullCount = ips.filter((ip) => isFullIP(ip)).length;
+  const okCount = ips.length - coolingCount - fullCount;
+  const visible = ips.filter((ip) => matchesLoadFilter(ip, filter));
+  const sticky = visible.filter(isStickyIP);
+  const dedicated = visible.filter((ip) => !isStickyIP(ip));
+  const stickyGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; title: string; items: AntiDegradeIPDTO[] }>();
+    for (const ip of sticky) {
+      const key = nodeGroupKey(ip);
+      const current = groups.get(key);
+      if (current) {
+        current.items.push(ip);
+        continue;
+      }
+      groups.set(key, { key, title: nodeGroupTitle(ip, t("antidegrade.nodes")), items: [ip] });
+    }
+    return [...groups.values()].sort((a, b) => {
+      const aHot = a.items.some((ip) => ip.cooling || isFullIP(ip)) ? 0 : 1;
+      const bHot = b.items.some((ip) => ip.cooling || isFullIP(ip)) ? 0 : 1;
+      if (aHot !== bHot) return aHot - bHot;
+      return a.title.localeCompare(b.title);
+    });
+  }, [sticky, t]);
+  const dedicatedSorted = [...dedicated].sort((a, b) => {
+    const aHot = a.cooling || isFullIP(a) ? 0 : 1;
+    const bHot = b.cooling || isFullIP(b) ? 0 : 1;
+    if (aHot !== bHot) return aHot - bHot;
+    return a.exitIp.localeCompare(b.exitIp);
+  });
+  const filters: { id: LoadFilter; label: string; count: number }[] = [
+    { id: "all", label: t("antidegrade.filterAll"), count: ips.length },
+    { id: "cooling", label: t("antidegrade.cooling"), count: coolingCount },
+    { id: "full", label: t("antidegrade.full"), count: fullCount },
+    { id: "ok", label: t("antidegrade.filterOk"), count: okCount },
+  ];
   return (
     <section className="overflow-hidden rounded-lg bg-card">
-      <div className="border-b px-4 py-4 sm:px-5">
-        <h2 className="text-sm font-medium">{t("antidegrade.loadTab")}</h2>
-        <p className="mt-1 text-xs text-muted-foreground">{t("antidegrade.loadHelp")}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3 sm:px-5">
+        <div className="min-w-0">
+          <h2 className="text-sm font-medium">{t("antidegrade.loadTab")}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{t("antidegrade.loadHelp")}</p>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {filters.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setFilter(item.id)}
+              className={cn("rounded-md px-2 py-1 text-[11px] tabular-nums", filter === item.id ? "bg-secondary font-medium" : "text-muted-foreground hover:bg-secondary/60")}
+            >
+              {item.label} {item.count}
+            </button>
+          ))}
+        </div>
       </div>
-      {ips.length === 0 ? (
+      {visible.length === 0 ? (
         <p className="px-4 py-10 text-center text-xs text-muted-foreground sm:px-5">{t("antidegrade.noIps")}</p>
-      ) : ips.map((ip) => (
-        <IPLoadRow key={ip.exitIp} ip={ip} locale={locale} onClear={() => onClear(ip.exitIp)} clearing={clearing} />
-      ))}
+      ) : (
+        <div className="max-h-[28rem] overflow-y-auto">
+          {stickyGroups.map((group) => {
+            const hot = group.items.some((ip) => ip.cooling || isFullIP(ip));
+            const open = expanded[group.key] ?? hot;
+            const cooling = group.items.filter((ip) => ip.cooling).length;
+            return (
+              <div key={group.key} className="border-b last:border-b-0">
+                <button type="button" className="flex w-full items-center gap-2 px-4 py-2 text-left sm:px-5" onClick={() => setExpanded((current) => ({ ...current, [group.key]: !open }))}>
+                  <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition", !open && "-rotate-90")} />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.title}</span>
+                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                    {t("antidegrade.groupSummary", { count: group.items.length, cooling })}
+                  </span>
+                </button>
+                {open ? group.items.map((ip) => (
+                  <CompactIPRow key={ip.exitIp} ip={ip} locale={locale} sticky clearing={clearing} onClear={() => onClear(ip.exitIp)} />
+                )) : null}
+              </div>
+            );
+          })}
+          {dedicatedSorted.length > 0 ? (
+            <div className={cn(stickyGroups.length > 0 && "border-t")}>
+              {stickyGroups.length > 0 ? (
+                <p className="px-4 py-2 text-[11px] text-muted-foreground sm:px-5">{t("antidegrade.fixedExits")}</p>
+              ) : null}
+              {dedicatedSorted.map((ip) => (
+                <CompactIPRow key={ip.exitIp} ip={ip} locale={locale} sticky={false} clearing={clearing} onClear={() => onClear(ip.exitIp)} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
     </section>
   );
 }
 
-function IPLoadRow({ ip, locale, onClear, clearing }: { ip: AntiDegradeIPDTO; locale: string; onClear: () => void; clearing: boolean }) {
+function CompactIPRow({ ip, locale, sticky, onClear, clearing }: { ip: AntiDegradeIPDTO; locale: string; sticky: boolean; onClear: () => void; clearing: boolean }) {
   const { t } = useTranslation();
-  const limit = Math.max(ip.accountLimit, 1);
-  const ratio = Math.min(ip.accountCount / limit, 1);
-  const tone = ip.cooling ? "bg-muted-foreground/40" : ratio >= 1 ? "bg-destructive" : ratio >= 0.6 ? "bg-amber-500" : "bg-emerald-500";
-  const badge = ip.operatorOverrideUntil ? t("antidegrade.override") : ip.cooling ? t("antidegrade.cooling") : ratio >= 1 ? t("antidegrade.full") : ratio >= 0.6 ? t("antidegrade.nearFull") : t("antidegrade.idle");
+  const primary = sticky
+    ? (ip.accounts[0]?.name || ip.accounts[0]?.id || ip.exitIp)
+    : ip.exitIp;
+  const secondary = sticky
+    ? ip.accounts.slice(1).map((account) => account.name || account.id).join(" · ")
+    : (ip.nodeNames[0] || (ip.nodeIds[0] ? `#${ip.nodeIds[0]}` : ""));
+  const extra = !sticky && ip.accounts.length > 0
+    ? ip.accounts.slice(0, 2).map((account) => account.name || account.id).join(" · ") + (ip.accounts.length > 2 ? ` +${ip.accounts.length - 2}` : "")
+    : "";
   const reason = ip.cooldownReason ? t(`antidegrade.reasons.${ip.cooldownReason}`, { defaultValue: ip.cooldownReason }) : "";
-  const title = (ip.exitIp.startsWith("node:") || ip.exitIp.startsWith("account:")) && ip.nodeNames[0] ? ip.nodeNames[0] : ip.exitIp;
-  const names = ip.nodeNames.join(" · ") || (ip.nodeIds.length ? ip.nodeIds.map((id) => `#${id}`).join(" · ") : t("antidegrade.nodes"));
   return (
-    <div className="border-b px-4 py-3 last:border-b-0 sm:px-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate font-mono text-xs">{title}</p>
-          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{names}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Badge variant="outline" className={cn("whitespace-nowrap", ip.cooling ? "text-muted-foreground" : ratio >= 1 ? "text-destructive" : ratio >= 0.6 ? "text-amber-700 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400")}>{badge}</Badge>
-          {ip.cooling ? <Button size="sm" variant="secondary" disabled={clearing} onClick={onClear}>{t("antidegrade.clearIp")}</Button> : null}
-        </div>
+    <div className="flex items-center gap-3 border-t px-4 py-1.5 sm:px-5">
+      <span className={cn("size-1.5 shrink-0 rounded-full", ip.cooling ? "bg-muted-foreground/50" : isFullIP(ip) ? "bg-destructive" : "bg-emerald-500")} />
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-mono text-xs">{primary}</p>
+        {secondary || extra ? (
+          <p className="truncate text-[11px] text-muted-foreground">{[secondary, extra].filter(Boolean).join(" · ")}</p>
+        ) : null}
+        {ip.cooling && ip.cooldownUntil ? (
+          <p className="truncate text-[11px] text-muted-foreground">{reason} · {t("antidegrade.until", { time: formatDateTime(ip.cooldownUntil, locale) })}</p>
+        ) : null}
       </div>
-      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-          <i className={cn("block h-full", tone)} style={{ width: `${Math.max(ratio * 100, ip.accountCount > 0 ? 8 : 0)}%` }} />
-        </div>
-        <span className="font-mono text-xs tabular-nums text-muted-foreground">{ip.accountCount}/{ip.accountLimit}</span>
-      </div>
-      {ip.accounts.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-          {ip.accounts.map((account) => (
-            <Link key={account.id} to="/accounts" className="text-xs hover:underline">{account.name || account.id}</Link>
-          ))}
-        </div>
-      ) : null}
-      {ip.cooling && ip.cooldownUntil ? (
-        <p className="mt-1 text-[11px] text-muted-foreground">{reason} · {t("antidegrade.until", { time: formatDateTime(ip.cooldownUntil, locale) })}</p>
-      ) : null}
+      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{ip.accountCount}/{ip.accountLimit}</span>
+      <span className={cn("w-12 shrink-0 text-right text-[11px]", ipStatusClass(ip))}>{ipStatusLabel(ip, t)}</span>
+      {ip.cooling ? (
+        <Button size="sm" variant="ghost" className="h-7 px-2" disabled={clearing} onClick={onClear}>{t("antidegrade.clearIp")}</Button>
+      ) : <span className="w-12 shrink-0" />}
     </div>
   );
 }
