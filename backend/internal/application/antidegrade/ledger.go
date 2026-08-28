@@ -353,6 +353,53 @@ func parseNodeKey(key string) (uint64, bool) {
 	return id, err == nil && id != 0
 }
 
+func nodeHasID(state *ipState, nodeID uint64) bool {
+	if state == nil || nodeID == 0 {
+		return false
+	}
+	for _, id := range state.NodeIDs {
+		if id == nodeID {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *ledger) accountIPOnNode(accountID, nodeID uint64) string {
+	if accountID == 0 || nodeID == 0 {
+		return ""
+	}
+	acc := l.state.Accounts[accountID]
+	if acc.LastFailIP != "" {
+		if id, ok := parseNodeKey(acc.LastFailIP); ok && id == nodeID {
+			return acc.LastFailIP
+		}
+		if nodeHasID(l.state.IPs[acc.LastFailIP], nodeID) && !strings.HasPrefix(acc.LastFailIP, "node:") {
+			return acc.LastFailIP
+		}
+	}
+	for _, key := range sortedKeys(l.state.IPs) {
+		if strings.HasPrefix(key, "node:") || strings.HasPrefix(key, "account:") {
+			continue
+		}
+		state := l.state.IPs[key]
+		if !nodeHasID(state, nodeID) {
+			continue
+		}
+		for _, event := range state.Events {
+			if event.AccountID == accountID {
+				return key
+			}
+		}
+		for _, hit := range state.Window {
+			if hit.AccountID == accountID {
+				return key
+			}
+		}
+	}
+	return ""
+}
+
 func (l *ledger) lastIPForNode(nodeID uint64) string {
 	if nodeID == 0 {
 		return ""

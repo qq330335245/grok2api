@@ -249,6 +249,37 @@ func TestExitIPResolvesConsoleNodeAndRekeysPlaceholder(t *testing.T) {
 	}
 }
 
+func TestSharedExitNodeCoolsAccountIPWithoutBlockingOthers(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	nodes := staticNodes{
+		{ID: 82, Enabled: true, ExitIP: "2001:db8::probe", Name: "ipv6-sticky", Scope: "grok_build", SharedExit: true},
+		{ID: 1, Enabled: true, ExitIP: "203.0.113.1", Name: "fixed", Scope: "grok_build"},
+	}
+	controller := New(Config{
+		Enabled: true, Mode: ModeEnforce, DensityMaxAccounts: 1, DirtyIPCooldown: 30 * time.Minute,
+		StateFile: t.TempDir() + "/l.json",
+	}, nodes, nil, nil)
+	controller.ledger.now = func() time.Time { return now }
+	degraded := accountdomain.Credential{ID: 41, Provider: accountdomain.ProviderBuild, EgressNodeID: 82}
+	healthy := accountdomain.Credential{ID: 42, Provider: accountdomain.ProviderBuild, EgressNodeID: 82}
+	controller.OnMissingThinking(context.Background(), degraded, 82, "2001:db8::aaaa")
+
+	got, err := controller.Admit(context.Background(), healthy, nil)
+	if err != nil {
+		t.Fatalf("healthy account must still use the sticky node, err=%v", err)
+	}
+	if got != 0 {
+		t.Fatalf("healthy binding override=%d, want 0 (keep node 82)", got)
+	}
+	got, err = controller.Admit(context.Background(), degraded, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("degraded account must leave the cooled sticky IP, override=%d want 1", got)
+	}
+}
+
 func TestAppliesToDefaultsToBuildOnly(t *testing.T) {
 	controller := New(Config{Enabled: true, Mode: ModeEnforce, StateFile: t.TempDir() + "/l.json"}, nil, nil, nil)
 	if !controller.AppliesTo(accountdomain.ProviderBuild) || !controller.ActiveFor(accountdomain.ProviderBuild) {

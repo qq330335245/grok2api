@@ -25,6 +25,10 @@ type Node struct {
 	ExitIP  string
 	Name    string
 	Scope   string
+	// SharedExit is a sticky/account-bound or proxy-pool node: many accounts
+	// share the node but each has its own ExitIP. Cooling one account IP must
+	// not disable the node for everyone.
+	SharedExit bool
 }
 
 type NodeSource interface {
@@ -206,15 +210,17 @@ func filterNodes(nodes []Node, provider accountdomain.Provider) []Node {
 }
 
 func (c *Controller) nodeCoolingLocked(node Node, now time.Time) bool {
-	keys := make([]string, 0, 3)
-	if key := exitKey(node); key != "" {
-		keys = append(keys, key)
-	}
+	keys := make([]string, 0, 2)
 	if placeholder := nodePlaceholder(node.ID); placeholder != "" {
 		keys = append(keys, placeholder)
 	}
-	if ip := c.ledger.lastIPForNode(node.ID); ip != "" {
-		keys = append(keys, ip)
+	// Dedicated nodes: the catalog ExitIP is the shared public IP. Sticky /
+	// account-bound nodes only store a probe identity there; cooling one
+	// account's hashed ExitIP must not be treated as the whole node.
+	if !node.SharedExit {
+		if key := exitKey(node); key != "" {
+			keys = append(keys, key)
+		}
 	}
 	seen := map[string]struct{}{}
 	for _, key := range keys {
@@ -229,13 +235,56 @@ func (c *Controller) nodeCoolingLocked(node Node, now time.Time) bool {
 	return false
 }
 
+func (c *Controller) accountNodeCoolingLocked(node Node, accountID uint64, now time.Time) bool {
+	if accountID == 0 || node.ID == 0 {
+		return false
+	}
+	acc := c.ledger.state.Accounts[accountID]
+	if acc.LastFailIP == "" {
+		return false
+	}
+	state := c.ledger.state.IPs[acc.LastFailIP]
+	if !c.ledger.cooling(state, now) {
+		return false
+	}
+	if id, ok := parseNodeKey(acc.LastFailIP); ok && id == node.ID {
+		return true
+	}
+	if state == nil {
+		return false
+	}
+	for _, id := range state.NodeIDs {
+		if id == node.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Controller) densityKeyLocked(node Node, accountID uint64) string {
+	if node.SharedExit {
+		if ip := c.ledger.accountIPOnNode(accountID, node.ID); ip != "" {
+			return ip
+		}
+		if accountID != 0 && node.ID != 0 {
+			return fmt.Sprintf("account:%d:node:%d", accountID, node.ID)
+		}
+	}
+	return exitKey(node)
+}
+
 func (c *Controller) nodeEligibleLocked(cfg Config, node Node, accountID uint64, excluded map[uint64]bool, now time.Time) bool {
 	if node.ID == 0 || !node.Enabled || excluded[node.ID] || !hasRealExitIP(node) {
 		return false
 	}
-	key := exitKey(node)
-	c.ledger.rememberNode(key, node.ID)
-	if c.nodeCoolingLocked(node, now) {
+	if key := exitKey(node); key != "" {
+		c.ledger.rememberNode(key, node.ID)
+	}
+	if c.nodeCoolingLocked(node, now) || c.accountNodeCoolingLocked(node, accountID, now) {
+		return false
+	}
+	key := c.densityKeyLocked(node, accountID)
+	if key == "" {
 		return false
 	}
 	state := c.ledger.ip(key)
@@ -246,9 +295,12 @@ func (c *Controller) nodeEligibleLocked(cfg Config, node Node, accountID uint64,
 }
 
 func (c *Controller) occupyLocked(node Node, accountID uint64, window time.Duration, now time.Time) {
-	key := exitKey(node)
+	key := c.densityKeyLocked(node, accountID)
 	if key == "" {
 		return
+	}
+	if real := exitKey(node); real != "" {
+		c.ledger.rememberNode(real, node.ID)
 	}
 	c.ledger.rememberNode(key, node.ID)
 	c.ledger.noteWindow(key, accountID, window, now)

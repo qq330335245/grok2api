@@ -45,6 +45,7 @@ func (n antiDegradeNodes) ListBuildNodes(ctx context.Context) ([]antidegrade.Nod
 	for _, value := range values {
 		result = append(result, antidegrade.Node{
 			ID: value.ID, Enabled: value.Enabled, ExitIP: value.ExitIP, Name: value.Name, Scope: string(value.Scope),
+			SharedExit: value.AccountBoundProxy || value.ProxyPool,
 		})
 	}
 	return result, nil
