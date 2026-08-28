@@ -63,11 +63,26 @@ func (c *Controller) Snapshot(ctx context.Context) Status {
 	c.ledger.mu.Lock()
 	c.ledger.rekeyFromNodes(nodes)
 
+	probeIPs := map[string]struct{}{}
+	for _, node := range nodes {
+		if node.SharedExit {
+			if ip := strings.TrimSpace(node.ExitIP); ip != "" {
+				probeIPs[ip] = struct{}{}
+			}
+		}
+	}
+
 	ips := make([]IPStatus, 0, len(c.ledger.state.IPs))
 	events := make([]EventStatus, 0)
 	for _, key := range sortedKeys(c.ledger.state.IPs) {
 		state := c.ledger.state.IPs[key]
 		if state == nil {
+			continue
+		}
+		if strings.HasPrefix(key, "account:") {
+			continue
+		}
+		if _, probe := probeIPs[key]; probe {
 			continue
 		}
 		accountIDs := c.ledger.windowAccounts(state, cfg.DensityWindow, now)

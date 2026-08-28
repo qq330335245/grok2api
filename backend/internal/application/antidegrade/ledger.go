@@ -448,6 +448,18 @@ func (l *ledger) rekeyFromNodes(nodes []Node) {
 			if !ok {
 				continue
 			}
+			if node.SharedExit {
+				// Probe identity is not the per-account ExitIP. Never fold hashed
+				// /128s into it, and drop a stale cooldown on the probe address.
+				if ip := strings.TrimSpace(node.ExitIP); ip != "" {
+					if st := l.state.IPs[ip]; st != nil && !st.CooldownUntil.IsZero() {
+						st.CooldownUntil = time.Time{}
+						st.CooldownReason = ""
+						l.dirty = true
+					}
+				}
+				continue
+			}
 			ip := strings.TrimSpace(node.ExitIP)
 			if ip == "" || strings.HasPrefix(ip, "node:") || ip == key {
 				continue

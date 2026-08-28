@@ -277,8 +277,10 @@ func (c *Controller) nodeEligibleLocked(cfg Config, node Node, accountID uint64,
 	if node.ID == 0 || !node.Enabled || excluded[node.ID] || !hasRealExitIP(node) {
 		return false
 	}
-	if key := exitKey(node); key != "" {
-		c.ledger.rememberNode(key, node.ID)
+	if !node.SharedExit {
+		if key := exitKey(node); key != "" {
+			c.ledger.rememberNode(key, node.ID)
+		}
 	}
 	if c.nodeCoolingLocked(node, now) || c.accountNodeCoolingLocked(node, accountID, now) {
 		return false
@@ -299,8 +301,10 @@ func (c *Controller) occupyLocked(node Node, accountID uint64, window time.Durat
 	if key == "" {
 		return
 	}
-	if real := exitKey(node); real != "" {
-		c.ledger.rememberNode(real, node.ID)
+	if !node.SharedExit {
+		if real := exitKey(node); real != "" {
+			c.ledger.rememberNode(real, node.ID)
+		}
 	}
 	c.ledger.rememberNode(key, node.ID)
 	c.ledger.noteWindow(key, accountID, window, now)
