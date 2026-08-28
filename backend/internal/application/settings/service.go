@@ -119,12 +119,14 @@ type SegmentedSelectorConfig struct {
 
 // AuditConfig 是管理接口使用的审计可编辑输入。
 type AuditConfig struct {
-	BufferSize            int
-	BatchSize             int
-	FlushInterval         string
-	CommitDelayMS         int
-	RetentionDays         int
-	RetentionDaysProvided bool
+	BufferSize                int
+	BatchSize                 int
+	FlushInterval             string
+	CommitDelayMS             int
+	RetentionDays             int
+	RetentionDaysProvided     bool
+	TrafficLogEnabled         bool
+	TrafficLogEnabledProvided bool
 }
 
 // ClientKeyDefaultsConfig 是管理接口使用的密钥默认限制输入。
@@ -440,11 +442,16 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	if value.Audit.RetentionDays != nil {
 		retentionDays = *value.Audit.RetentionDays
 	}
+	trafficLogEnabled := base.Audit.TrafficLogEnabled
+	if value.Audit.TrafficLogEnabled != nil {
+		trafficLogEnabled = *value.Audit.TrafficLogEnabled
+	}
 	base.Audit = config.AuditConfig{
 		BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: config.Duration(value.Audit.FlushInterval),
 		CommitDelay: config.Duration(commitDelay), RetentionDays: retentionDays,
 		LedgerMode: base.Audit.LedgerMode, LedgerFailureThreshold: base.Audit.LedgerFailureThreshold,
 		LedgerUnhealthyGrace: base.Audit.LedgerUnhealthyGrace, LedgerQueueHighWatermarkPct: base.Audit.LedgerQueueHighWatermarkPct,
+		TrafficLogEnabled: trafficLogEnabled, TrafficLogDirectory: base.Audit.TrafficLogDirectory,
 	}
 	base.ClientKeyDefaults = config.ClientKeyDefaultsConfig{
 		RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
@@ -531,7 +538,8 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 		},
 		Audit: settingsdomain.AuditConfig{
 			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: value.Audit.FlushInterval.Value(), CommitDelay: value.Audit.CommitDelay.Value(),
-			RetentionDays: intPointer(value.Audit.RetentionDays),
+			RetentionDays:     intPointer(value.Audit.RetentionDays),
+			TrafficLogEnabled: boolPointer(value.Audit.TrafficLogEnabled),
 		},
 		ClientKeyDefaults: settingsdomain.ClientKeyDefaultsConfig{
 			RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
@@ -553,7 +561,7 @@ func toDomainAntiDegrade(value config.AntiDegradeConfig) *settingsdomain.AntiDeg
 	return &settingsdomain.AntiDegradeConfig{
 		Enabled: value.Enabled, Mode: value.Mode, Providers: append([]string(nil), value.Providers...),
 		ThinkingMinOutput: value.ThinkingMinOutput,
-		DensityWindow: value.DensityWindow.Value(), DensityMaxAccounts: value.DensityMaxAccounts,
+		DensityWindow:     value.DensityWindow.Value(), DensityMaxAccounts: value.DensityMaxAccounts,
 		DirtyIPCooldown: value.DirtyIPCooldown.Value(), FarmIPCooldown: value.FarmIPCooldown.Value(),
 		MaxIPRetries: value.MaxIPRetries, AccountIPFailThreshold: value.AccountIPFailThreshold,
 		AccountQuarantineTTL: value.AccountQuarantineTTL.Value(), ScorePrior: value.ScorePrior,
@@ -562,6 +570,8 @@ func toDomainAntiDegrade(value config.AntiDegradeConfig) *settingsdomain.AntiDeg
 }
 
 func intPointer(value int) *int { return &value }
+
+func boolPointer(value bool) *bool { return &value }
 
 func (s *Service) snapshotLocked() Snapshot {
 	restartRequired := []string{}
@@ -641,6 +651,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	}
 	if input.Audit.RetentionDaysProvided {
 		next.Audit.RetentionDays = input.Audit.RetentionDays
+	}
+	if input.Audit.TrafficLogEnabledProvided {
+		next.Audit.TrafficLogEnabled = input.Audit.TrafficLogEnabled
 	}
 	next.ClientKeyDefaults.RPMLimit = input.ClientKeyDefaults.RPMLimit
 	next.ClientKeyDefaults.MaxConcurrent = input.ClientKeyDefaults.MaxConcurrent
@@ -798,6 +811,7 @@ func toEditable(cfg config.Config) EditableConfig {
 		Audit: AuditConfig{
 			BufferSize: cfg.Audit.BufferSize, BatchSize: cfg.Audit.BatchSize, FlushInterval: cfg.Audit.FlushInterval.String(), CommitDelayMS: int(cfg.Audit.CommitDelay.Value() / time.Millisecond),
 			RetentionDays: cfg.Audit.RetentionDays, RetentionDaysProvided: true,
+			TrafficLogEnabled: cfg.Audit.TrafficLogEnabled, TrafficLogEnabledProvided: true,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: cfg.ClientKeyDefaults.RPMLimit, MaxConcurrent: cfg.ClientKeyDefaults.MaxConcurrent},
 		Accounts: AccountsConfig{

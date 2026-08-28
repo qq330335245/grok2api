@@ -158,6 +158,7 @@ export const settingsSchema = z.object({
     flushInterval: auditFlushDuration,
     commitDelayMS: positiveInteger.max(50),
     retentionDays: z.number().int().min(0).max(365),
+    trafficLogEnabled: z.boolean(),
   })
     .refine((value) => value.batchSize <= value.bufferSize, { path: ["batchSize"] }),
   clientKeyDefaults: z.object({ rpmLimit: positiveInteger.max(100_000), maxConcurrent: positiveInteger.max(1_024) }),
@@ -221,6 +222,7 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
       flushInterval: parseDuration(config.audit.flushInterval),
       commitDelayMS: config.audit.commitDelayMS,
       retentionDays: config.audit.retentionDays ?? 7,
+      trafficLogEnabled: config.audit.trafficLogEnabled ?? false,
     },
     clientKeyDefaults: config.clientKeyDefaults,
     accounts: {
@@ -270,6 +272,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
       flushInterval: formatDuration(config.audit.flushInterval),
       commitDelayMS: config.audit.commitDelayMS,
       retentionDays: config.audit.retentionDays,
+      trafficLogEnabled: config.audit.trafficLogEnabled,
     },
     clientKeyDefaults: config.clientKeyDefaults,
     accounts: {

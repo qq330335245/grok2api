@@ -41,6 +41,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
 	redisruntime "github.com/chenyme/grok2api/backend/internal/infra/runtime/redis"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"github.com/chenyme/grok2api/backend/internal/infra/trafficlog"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
 	"github.com/chenyme/grok2api/backend/internal/pkg/perfmetrics"
 	"github.com/chenyme/grok2api/backend/internal/pkg/reasoningreplay"
@@ -355,6 +356,8 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	gatewayService.UpdateQualityRetry(qualityRetryRuntime(cfg.QualityGuard.RequestRetry))
 	antiDegradeController := newAntiDegradeController(cfg.QualityGuard.AntiDegrade, egressService, accountService, logger)
 	gatewayService.SetAntiDegrade(antiDegradeController)
+	trafficRecorder := trafficlog.New(trafficlog.Config{Enabled: cfg.Audit.TrafficLogEnabled, Directory: cfg.Audit.TrafficLogDirectory}, logger)
+	gatewayService.ConfigureTrafficLog(trafficRecorder)
 	egressService.SetNodeCooldownClearer(antiDegradeController)
 	accountService.SetQuarantineClearer(antiDegradeController)
 	gatewayService.UpdateVideoMaxAttempts(cfg.Routing.VideoMaxAttempts)
@@ -420,6 +423,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		gatewayService.UpdateBuildForbiddenReauthPolicy(next.Accounts.MarkBuildForbiddenReauth, next.Accounts.BuildForbiddenReauthCodes)
 		auditService.UpdateWriterConfig(next.Audit.BatchSize, next.Audit.FlushInterval.Value(), next.Audit.CommitDelay.Value())
 		auditService.UpdateLedgerConfig(auditLedgerConfig(next.Audit))
+		trafficRecorder.Update(trafficlog.Config{Enabled: next.Audit.TrafficLogEnabled, Directory: next.Audit.TrafficLogDirectory})
 		clientKeyService.UpdateDefaults(next.ClientKeyDefaults.RPMLimit, next.ClientKeyDefaults.MaxConcurrent)
 		accountService.UpdateAutoCleanConfig(accountAutoCleanConfig(next.Accounts))
 	})

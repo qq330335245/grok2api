@@ -253,6 +253,8 @@ type AuditConfig struct {
 	LedgerFailureThreshold      int      `yaml:"ledgerFailureThreshold"`
 	LedgerUnhealthyGrace        Duration `yaml:"ledgerUnhealthyGrace"`
 	LedgerQueueHighWatermarkPct int      `yaml:"ledgerQueueHighWatermarkPercent"`
+	TrafficLogEnabled           bool     `yaml:"trafficLogEnabled"`
+	TrafficLogDirectory         string   `yaml:"trafficLogDirectory"`
 }
 
 // QualityGuardConfig defines the optional egress-quality sidecar policy.

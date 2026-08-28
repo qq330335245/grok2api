@@ -122,6 +122,9 @@ audit:
   ledgerFailureThreshold: 1
   ledgerUnhealthyGrace: 10s
   ledgerQueueHighWatermarkPercent: 90
+  # [排查时打开] 把每次推理的请求头（脱敏）、请求体和上游 SSE 写成文件。体积大，用完关掉。
+  trafficLogEnabled: false
+  trafficLogDirectory: "./data/traffic-logs"
 
 # [按需启用] Grok Build 出口质量守护。仅配置后仍不会自动启动 sidecar；
 # 使用 docker compose --profile quality-guard up -d --build 启动。

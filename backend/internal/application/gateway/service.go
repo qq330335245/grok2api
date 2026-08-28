@@ -32,6 +32,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"github.com/chenyme/grok2api/backend/internal/infra/trafficlog"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
 	"github.com/chenyme/grok2api/backend/internal/repository"
@@ -233,6 +234,7 @@ type Service struct {
 	markBuildChatDeniedAsReauth atomic.Bool
 	qualityRetry                atomic.Pointer[QualityRetryRuntime]
 	antiDegrade                 atomic.Pointer[antidegrade.Controller]
+	trafficLog                  atomic.Pointer[trafficlog.Recorder]
 }
 
 type teamModelRateLimit struct {
@@ -469,6 +471,34 @@ func (s *Service) markTeamModelRateLimit(credential accountdomain.Credential, up
 	s.refreshTeamModelRateLimitStateLocked()
 	s.rateLimitMu.Unlock()
 	return value
+}
+
+func (s *Service) ConfigureTrafficLog(recorder *trafficlog.Recorder) {
+	if s == nil {
+		return
+	}
+	s.trafficLog.Store(recorder)
+}
+
+func (s *Service) startTrafficLog(input Input, operation audit.Operation) *trafficlog.Session {
+	if s == nil {
+		return nil
+	}
+	recorder := s.trafficLog.Load()
+	if recorder == nil {
+		return nil
+	}
+	session := recorder.Start(trafficlog.SessionMeta{
+		RequestID: input.RequestID, Method: input.Method, Path: input.Path,
+		Operation: string(operation), Model: input.PublicModel, Streaming: input.Streaming,
+		ClientKeyName: input.ClientKey.Name,
+	})
+	if session == nil {
+		return nil
+	}
+	session.WriteHeaders(http.Header(input.Headers))
+	session.WriteRequestBody(input.Body)
+	return session
 }
 
 func (s *Service) SetLogger(logger *slog.Logger) {
@@ -861,6 +891,10 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	if input.auditOperation != "" {
 		auditOperation = input.auditOperation
 	}
+	traffic := s.startTrafficLog(input, auditOperation)
+	if traffic != nil {
+		defer traffic.Close()
+	}
 	routes, aliasEffort, err := s.resolvePublicModelRoutes(ctx, input.PublicModel, input.ClientKey.AllowModelAliases)
 	if err != nil {
 		return nil, ErrModelNotFound
@@ -1094,6 +1128,19 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		auditBase.ReasoningEffort = normalizedMetadata.ReasoningEffort
 		err = failureAttempts.captureResponse(credential, started, response, err)
 		timing.markUpstream(time.Since(started))
+		if traffic != nil {
+			status := 0
+			if response != nil {
+				status = response.StatusCode
+			}
+			traffic.BeginAttempt(credential.ID, credential.Name, firstNonZero(forcedNode, credential.EgressNodeID), status)
+			if err != nil {
+				traffic.WriteNote("upstream error: %v", err)
+			}
+			if response != nil && response.Body != nil {
+				response.Body = traffic.Tee(response.Body)
+			}
+		}
 		return response, err
 	}
 	ensureCredential := func(credential accountdomain.Credential, force bool) (accountdomain.Credential, error) {
@@ -1298,7 +1345,7 @@ attemptLoop:
 			}
 		}
 		timing.markSelection(time.Since(selectionStarted))
-				if err != nil {
+		if err != nil {
 			if antiDegradePin != 0 {
 				reason := ""
 				var retryAfter time.Duration
@@ -1695,6 +1742,9 @@ attemptLoop:
 				}
 				response.Body = replay
 				peekedStreamedThinking = peekUsage.StreamedThinking
+				if traffic != nil {
+					traffic.WriteHold(string(verdict), peekUsage.StreamedThinking, peekUsage.OutputTokens, peekUsage.ReasoningTokens)
+				}
 				if antiDegradeRetryMiss(antiDegradePin, peekedStreamedThinking) {
 					verdict = QualityWithhold
 				}

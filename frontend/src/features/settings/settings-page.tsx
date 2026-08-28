@@ -351,6 +351,13 @@ export function SettingsPage() {
           </SettingsPane>
 
           <SettingsPane value="audit">
+            <SettingsSection title={t("settings.audit.trafficLogTitle")}>
+              <div className="space-y-0">
+                <SettingsField controlId="audit-traffic-log" label={t("settings.audit.trafficLogEnabled")} description={t("settings.audit.trafficLogEnabledHelp")}>
+                  <Controller control={form.control} name="audit.trafficLogEnabled" render={({ field }) => <div className="flex h-9 items-center"><Switch id="audit-traffic-log" checked={field.value} onCheckedChange={field.onChange} /></div>} />
+                </SettingsField>
+              </div>
+            </SettingsSection>
             <SettingsSection title={t("settings.audit.retentionTitle")}>
               <div className="space-y-0">
                 <SettingsField
