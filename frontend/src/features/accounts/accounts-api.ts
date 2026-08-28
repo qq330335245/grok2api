@@ -406,7 +406,8 @@ const decodeAccountTaskStreamPayload = createObjectDecoder<AccountTaskStreamPayl
   phase: isOptional(isOneOf("importing", "converting", "syncing")), updated: isOptional(isNumber), succeeded: isOptional(isNumber),
   code: isOptional(isString), message: isOptional(isString),
   id: isOptional(isString), name: isOptional(isString), email: isOptional(isString),
-  outcome: isOptional(isOneOf("ok", "invalid", "failed")), reason: isOptional(isString), httpStatus: isOptional(isNumber),
+  outcome: isOptional(isOneOf("ok", "invalid", "failed", "flagged")), reason: isOptional(isString), httpStatus: isOptional(isNumber),
+  botFlagSource: isOptional(isNumber),
 });
 
 function hasNumericResult(value: AccountTaskStreamPayload, fields: string[]): boolean {

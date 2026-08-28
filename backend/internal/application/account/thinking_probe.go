@@ -31,6 +31,17 @@ const (
 	probeMissingThinking
 )
 
+func (v thinkingProbeVerdict) String() string {
+	switch v {
+	case probeThinking:
+		return "thinking"
+	case probeMissingThinking:
+		return "missing"
+	default:
+		return "inconclusive"
+	}
+}
+
 func stickyProbeIdentity(credential accountdomain.Credential, attempt int) string {
 	base := strings.TrimSpace(credential.EgressIdentity)
 	if base == "" {
@@ -46,13 +57,18 @@ func stickyProbeIdentity(credential accountdomain.Credential, attempt int) strin
 	return base + "+" + strconv.Itoa(attempt)
 }
 
-func scanThinkingSSE(r io.Reader) thinkingProbeVerdict {
+type thinkingScan struct {
+	verdict thinkingProbeVerdict
+	event   string
+	delta   string
+}
+
+func scanThinkingSSE(r io.Reader) thinkingScan {
 	if r == nil {
-		return probeInconclusive
+		return thinkingScan{verdict: probeInconclusive}
 	}
 	reader := bufio.NewReader(r)
-	hasThinking := false
-	hasContent := false
+	var result thinkingScan
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -60,12 +76,9 @@ func scanThinkingSSE(r io.Reader) thinkingProbeVerdict {
 			if bytes.HasPrefix(trimmed, []byte("data:")) {
 				payload := bytes.TrimSpace(trimmed[5:])
 				if len(payload) > 0 && !bytes.Equal(payload, []byte("[DONE]")) {
-					observeThinkingPayload(payload, &hasThinking, &hasContent)
-					if hasThinking {
-						return probeThinking
-					}
-					if hasContent {
-						return probeMissingThinking
+					observeThinkingPayload(payload, &result)
+					if result.verdict == probeThinking || result.verdict == probeMissingThinking {
+						return result
 					}
 				}
 			}
@@ -74,25 +87,13 @@ func scanThinkingSSE(r io.Reader) thinkingProbeVerdict {
 			break
 		}
 		if err != nil {
-			if hasThinking {
-				return probeThinking
-			}
-			if hasContent {
-				return probeMissingThinking
-			}
-			return probeInconclusive
+			return result
 		}
 	}
-	if hasThinking {
-		return probeThinking
-	}
-	if hasContent {
-		return probeMissingThinking
-	}
-	return probeInconclusive
+	return result
 }
 
-func observeThinkingPayload(payload []byte, hasThinking, hasContent *bool) {
+func observeThinkingPayload(payload []byte, result *thinkingScan) {
 	var event struct {
 		Type    string          `json:"type"`
 		Delta   json.RawMessage `json:"delta"`
@@ -110,35 +111,69 @@ func observeThinkingPayload(payload []byte, hasThinking, hasContent *bool) {
 	}
 	switch event.Type {
 	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
-		if strings.TrimSpace(rawJSONString(event.Delta)) != "" {
-			*hasThinking = true
+		if text := strings.TrimSpace(rawJSONString(event.Delta)); text != "" {
+			noteThinking(result, event.Type, text)
 		}
 	case "response.output_text.delta":
-		if strings.TrimSpace(rawJSONString(event.Delta)) != "" {
-			*hasContent = true
+		if text := strings.TrimSpace(rawJSONString(event.Delta)); text != "" {
+			noteContent(result, event.Type, text)
 		}
 	}
 	for _, choice := range event.Choices {
 		delta := choice.Delta
-		if strings.TrimSpace(delta.Reasoning) != "" || strings.TrimSpace(delta.ReasoningContent) != "" || strings.TrimSpace(delta.ThinkingContent) != "" {
-			*hasThinking = true
+		switch {
+		case strings.TrimSpace(delta.ReasoningContent) != "":
+			noteThinking(result, "reasoning_content", delta.ReasoningContent)
+		case strings.TrimSpace(delta.ThinkingContent) != "":
+			noteThinking(result, "thinking_content", delta.ThinkingContent)
+		case strings.TrimSpace(delta.Reasoning) != "":
+			noteThinking(result, "reasoning", delta.Reasoning)
 		}
 		if delta.Content != "" {
-			*hasContent = true
+			noteContent(result, "content", delta.Content)
 		}
 	}
 }
 
+func noteThinking(result *thinkingScan, event, delta string) {
+	if result.verdict == probeThinking {
+		return
+	}
+	result.verdict = probeThinking
+	result.event = event
+	result.delta = truncateRunes(delta, 80)
+}
+
+func noteContent(result *thinkingScan, event, delta string) {
+	if result.verdict == probeThinking || result.verdict == probeMissingThinking {
+		return
+	}
+	result.verdict = probeMissingThinking
+	result.event = event
+	result.delta = truncateRunes(delta, 80)
+}
+
 func rawJSONString(raw json.RawMessage) string {
 	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+	if len(raw) < 2 || raw[0] != '"' {
 		return ""
 	}
 	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
+	if json.Unmarshal(raw, &text) != nil {
+		return ""
 	}
-	return string(raw)
+	return text
+}
+
+func truncateRunes(value string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	return string(runes[:max]) + "…"
 }
 
 func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.Credential) BuildDetectItemResult {
@@ -161,7 +196,7 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 		}
 		identity := stickyProbeIdentity(value, attempt)
 		identities = append(identities, identity)
-		verdict, status, probeErr := s.probeThinkingOnStickyIdentity(ctx, value, billing, identity)
+		scan, status, probeErr := s.probeThinkingOnStickyIdentity(ctx, value, billing, identity)
 		if status != 0 {
 			item.HTTPStatus = status
 		}
@@ -169,7 +204,8 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 			item.Reason = probeErr.Error()
 			return item
 		}
-		switch verdict {
+		s.logger.Info("bot_risk_probe_attempt", "account_id", value.ID, "identity", identity, "status", status, "verdict", scan.verdict.String(), "event", scan.event, "delta", scan.delta)
+		switch scan.verdict {
 		case probeThinking:
 			if persistErr := s.persistPageBotFlag(ctx, value, 0); persistErr != nil {
 				item.Reason = persistErr.Error()
@@ -177,7 +213,7 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 			}
 			item.BotFlagSource = 0
 			item.Outcome = BuildDetectOutcomeOK
-			item.Reason = fmt.Sprintf("thinking on %s", identity)
+			item.Reason = fmt.Sprintf("thinking on %s (%s)", identity, scan.event)
 			return item
 		case probeMissingThinking:
 			misses++
@@ -200,10 +236,10 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 	return item
 }
 
-func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accountdomain.Credential, billing *accountdomain.Billing, identity string) (thinkingProbeVerdict, int, error) {
+func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accountdomain.Credential, billing *accountdomain.Billing, identity string) (thinkingScan, int, error) {
 	adapter, ok := s.providers.Responses(accountdomain.ProviderBuild)
 	if !ok {
-		return probeInconclusive, 0, fmt.Errorf("Provider %s 未注册 Responses 能力", accountdomain.ProviderBuild)
+		return thinkingScan{verdict: probeInconclusive}, 0, fmt.Errorf("Provider %s 未注册 Responses 能力", accountdomain.ProviderBuild)
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, botRiskAttemptTimeout)
 	defer cancel()
@@ -221,13 +257,13 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 		Streaming:     true,
 	})
 	if err != nil {
-		return probeInconclusive, 0, nil
+		return thinkingScan{verdict: probeInconclusive}, 0, nil
 	}
 	if response.Body != nil {
 		defer response.Body.Close()
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return probeInconclusive, response.StatusCode, nil
+		return thinkingScan{verdict: probeInconclusive}, response.StatusCode, nil
 	}
 	return scanThinkingSSE(response.Body), response.StatusCode, nil
 }

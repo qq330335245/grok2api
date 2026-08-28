@@ -37,11 +37,11 @@ func TestScanThinkingSSEGoldStandard(t *testing.T) {
 		`data: {"type":"response.output_text.delta","delta":"323"}`,
 		``,
 	}, "\n")
-	if scanThinkingSSE(strings.NewReader(thinking)) != probeThinking {
+	if scanThinkingSSE(strings.NewReader(thinking)).verdict != probeThinking {
 		t.Fatal("responses reasoning delta must count as thinking")
 	}
 	chat := `data: {"choices":[{"delta":{"reasoning_content":"step"}}]}` + "\n\n"
-	if scanThinkingSSE(strings.NewReader(chat)) != probeThinking {
+	if scanThinkingSSE(strings.NewReader(chat)).verdict != probeThinking {
 		t.Fatal("chat reasoning_content must count as thinking")
 	}
 	missing := strings.Join([]string{
@@ -49,11 +49,15 @@ func TestScanThinkingSSEGoldStandard(t *testing.T) {
 		`data: {"type":"response.output_text.delta","delta":"hello"}`,
 		``,
 	}, "\n")
-	if scanThinkingSSE(strings.NewReader(missing)) != probeMissingThinking {
+	if scanThinkingSSE(strings.NewReader(missing)).verdict != probeMissingThinking {
 		t.Fatal("content without thinking must be a miss")
 	}
-	if scanThinkingSSE(strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")) != probeInconclusive {
+	if scanThinkingSSE(strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")).verdict != probeInconclusive {
 		t.Fatal("empty completed stream must be inconclusive")
+	}
+	objectDelta := `data: {"type":"response.reasoning_text.delta","delta":{"text":"nope"}}` + "\n\n"
+	if scanThinkingSSE(strings.NewReader(objectDelta)).verdict != probeInconclusive {
+		t.Fatal("non-string reasoning delta must not count as thinking")
 	}
 }
 
