@@ -24,6 +24,7 @@ Thumbs.db
 # Runtime data
 /data/
 /backend/data/
+/traffic-logs/
 *.log
 
 # Go

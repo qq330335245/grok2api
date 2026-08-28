@@ -14,6 +14,8 @@ services:
     volumes:
       - "${GROK2API_CONFIG:-./config.yaml}:/run/grok2api/config.yaml:ro"
       - grok2api-data:/app/data
+      # Keep debug SSE dumps off the data volume (often a USB disk).
+      - "${GROK2API_TRAFFIC_LOG_DIR:-./traffic-logs}:/app/data/traffic-logs"
       - quality_guard_state:/var/lib/grok2api-quality-guard
     restart: unless-stopped
     init: true
