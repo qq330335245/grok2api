@@ -892,8 +892,13 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		auditOperation = input.auditOperation
 	}
 	traffic := s.startTrafficLog(input, auditOperation)
+	trafficHandoff := false
 	if traffic != nil {
-		defer traffic.Close()
+		defer func() {
+			if !trafficHandoff {
+				traffic.Close()
+			}
+		}()
 	}
 	routes, aliasEffort, err := s.resolvePublicModelRoutes(ctx, input.PublicModel, input.ClientKey.AllowModelAliases)
 	if err != nil {
@@ -1151,6 +1156,9 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		return result, err
 	}
 	handoffResponse := func(response *provider.Response, lease *accountLease, credential accountdomain.Credential, upstreamStartedAt time.Time) *Result {
+		if traffic != nil {
+			trafficHandoff = true
+		}
 		accountID := credential.ID
 		var once sync.Once
 		finalize := func(usage Usage, responseID, errorCode string) {
@@ -1276,6 +1284,9 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 					outcome = "success"
 				}
 				timing.finish(s.logger, outcome)
+				if traffic != nil {
+					traffic.Close()
+				}
 			})
 		}
 		response.Body = &firstByteReadCloser{ReadCloser: response.Body, mark: timing.markFirstBody}

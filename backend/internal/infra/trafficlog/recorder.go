@@ -21,7 +21,7 @@ const (
 	defaultDirectory       = "./data/traffic-logs"
 	defaultMaxBytes  int64 = 8 << 20
 	defaultMaxFiles        = 50
-	maxRequestBody   int64 = 512 << 10
+	maxRequestBody   int64 = 4 << 20
 )
 
 // Config controls on-disk request/response dumps for Hold and degrade debugging.
@@ -101,7 +101,7 @@ func (r *Recorder) Start(meta SessionMeta) *Session {
 		path: path,
 		log:  r.logger,
 	}
-	session.writeString(fmt.Sprintf("=== REQUEST INFO ===\nTimestamp: %s\nRequest-ID: %s\nMethod: %s\nPath: %s\nOperation: %s\nModel: %s\nStreaming: %v\nClient-Key: %s\n\n",
+	session.writeStringLocked(fmt.Sprintf("=== REQUEST INFO ===\nTimestamp: %s\nRequest-ID: %s\nMethod: %s\nPath: %s\nOperation: %s\nModel: %s\nStreaming: %v\nClient-Key: %s\n\n",
 		time.Now().Format(time.RFC3339Nano), meta.RequestID, meta.Method, meta.Path, meta.Operation, meta.Model, meta.Streaming, meta.ClientKeyName))
 	r.prune(cfg.Directory, cfg.MaxFiles)
 	return session
@@ -151,13 +151,15 @@ type SessionMeta struct {
 	ClientKeyName string
 }
 
-// Session is one request dump. Not safe for concurrent writers.
+// Session is one request dump. Public methods are safe for concurrent Tee reads.
 type Session struct {
+	mu        sync.Mutex
 	file      *os.File
 	buf       *bufio.Writer
 	max       int64
 	n         int64
 	truncated bool
+	afterHold bool
 	path      string
 	log       *slog.Logger
 	attempt   int
@@ -175,33 +177,54 @@ func (s *Session) WriteHeaders(header http.Header) {
 	if s == nil {
 		return
 	}
-	s.writeString("=== HEADERS ===\n")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeStringLocked("=== HEADERS ===\n")
 	for _, key := range sortedHeaderKeys(header) {
 		for _, value := range header.Values(key) {
-			s.writeString(key + ": " + redactHeaderValue(key, value) + "\n")
+			s.writeStringLocked(key + ": " + redactHeaderValue(key, value) + "\n")
 		}
 	}
-	s.writeString("\n")
+	s.writeStringLocked("\n")
 }
 
 func (s *Session) WriteRequestBody(body []byte) {
 	if s == nil {
 		return
 	}
-	s.writeString("=== REQUEST BODY ===\n")
-	s.writeLimited(redactJSON(body), maxRequestBody)
-	if !bytes.HasSuffix(bytes.TrimSpace(body), []byte("\n")) {
-		s.writeString("\n")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	redacted := redactJSON(body)
+	original := len(redacted)
+	s.writeStringLocked(fmt.Sprintf("=== REQUEST BODY (%d bytes) ===\n", original))
+	limit := s.remainingLocked()
+	if limit > maxRequestBody {
+		limit = maxRequestBody
 	}
-	s.writeString("\n")
+	bodyTruncated := int64(original) > limit
+	if bodyTruncated {
+		redacted = redacted[:int(limit)]
+	}
+	s.writeRawLocked(redacted)
+	if bodyTruncated {
+		s.writeStringLocked(fmt.Sprintf("\n=== REQUEST BODY TRUNCATED (dumped %d of %d bytes) ===\n\n", len(redacted), original))
+		return
+	}
+	if !bytes.HasSuffix(bytes.TrimSpace(body), []byte("\n")) {
+		s.writeStringLocked("\n")
+	}
+	s.writeStringLocked("\n")
 }
 
 func (s *Session) BeginAttempt(accountID uint64, accountName string, nodeID uint64, status int) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.attempt++
-	s.writeString(fmt.Sprintf("=== UPSTREAM ATTEMPT %d ===\nTimestamp: %s\nAccount-ID: %d\nAccount: %s\nEgress-Node-ID: %d\nHTTP-Status: %d\n\n=== UPSTREAM BODY ===\n",
+	s.afterHold = false
+	s.writeStringLocked(fmt.Sprintf("=== UPSTREAM ATTEMPT %d ===\nTimestamp: %s\nAccount-ID: %d\nAccount: %s\nEgress-Node-ID: %d\nHTTP-Status: %d\n\n=== UPSTREAM BODY ===\n",
 		s.attempt, time.Now().Format(time.RFC3339Nano), accountID, accountName, nodeID, status))
 }
 
@@ -216,24 +239,34 @@ func (s *Session) WriteHold(verdict string, streamedThinking bool, outputTokens,
 	if s == nil {
 		return
 	}
-	s.writeString(fmt.Sprintf("\n=== HOLD ===\nTimestamp: %s\nVerdict: %s\nStreamed-Thinking: %v\nOutput-Tokens: %d\nReasoning-Tokens: %d\n\n",
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeStringLocked(fmt.Sprintf("\n=== HOLD ===\nTimestamp: %s\nVerdict: %s\nStreamed-Thinking: %v\nOutput-Tokens: %d\nReasoning-Tokens: %d\n\n",
 		time.Now().Format(time.RFC3339Nano), verdict, streamedThinking, outputTokens, reasoningTokens))
+	s.afterHold = true
 }
 
 func (s *Session) WriteNote(format string, args ...any) {
 	if s == nil {
 		return
 	}
-	s.writeString("=== NOTE ===\n" + fmt.Sprintf(format, args...) + "\n\n")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeStringLocked("=== NOTE ===\n" + fmt.Sprintf(format, args...) + "\n\n")
 }
 
 func (s *Session) Close() {
-	if s == nil || s.closed {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
 		return
 	}
 	s.closed = true
 	if s.truncated {
-		s.writeString("\n=== TRUNCATED ===\n")
+		_, _ = s.buf.Write([]byte("\n=== TRUNCATED ===\n"))
 	}
 	_ = s.buf.Flush()
 	_ = s.file.Close()
@@ -242,11 +275,11 @@ func (s *Session) Close() {
 	}
 }
 
-func (s *Session) writeString(value string) {
-	s.writeLimited([]byte(value), s.remaining())
+func (s *Session) writeStringLocked(value string) {
+	s.writeRawLocked([]byte(value))
 }
 
-func (s *Session) remaining() int64 {
+func (s *Session) remainingLocked() int64 {
 	left := s.max - s.n
 	if left < 0 {
 		return 0
@@ -254,11 +287,12 @@ func (s *Session) remaining() int64 {
 	return left
 }
 
-func (s *Session) writeLimited(data []byte, limit int64) {
+func (s *Session) writeRawLocked(data []byte) {
 	if s == nil || s.closed || len(data) == 0 || s.truncated {
 		return
 	}
-	if limit <= 0 || s.n >= s.max {
+	limit := s.remainingLocked()
+	if limit <= 0 {
 		s.truncated = true
 		return
 	}
@@ -273,6 +307,19 @@ func (s *Session) writeLimited(data []byte, limit int64) {
 	}
 }
 
+func (s *Session) writeUpstream(data []byte) {
+	if s == nil || len(data) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.afterHold {
+		s.afterHold = false
+		s.writeStringLocked("=== UPSTREAM BODY CONTINUED ===\n")
+	}
+	s.writeRawLocked(data)
+}
+
 type teeBody struct {
 	src  io.ReadCloser
 	sess *Session
@@ -281,7 +328,7 @@ type teeBody struct {
 func (t *teeBody) Read(p []byte) (int, error) {
 	n, err := t.src.Read(p)
 	if n > 0 {
-		t.sess.writeLimited(p[:n], t.sess.remaining())
+		t.sess.writeUpstream(p[:n])
 	}
 	return n, err
 }
@@ -383,12 +430,18 @@ func redactValue(value any) {
 
 func sensitiveKey(key string) bool {
 	k := strings.ToLower(strings.TrimSpace(key))
-	switch {
-	case strings.Contains(k, "token"), strings.Contains(k, "secret"), strings.Contains(k, "password"),
-		strings.Contains(k, "authorization"), strings.Contains(k, "cookie"), k == "sso", strings.Contains(k, "sso_"),
-		strings.Contains(k, "api_key"), strings.Contains(k, "apikey"):
+	switch k {
+	case "sso", "password", "secret", "authorization", "cookie", "set-cookie",
+		"api_key", "apikey", "x-api-key", "access_token", "refresh_token", "id_token",
+		"client_secret", "private_key":
 		return true
 	default:
-		return false
+		if k == "max_tokens" || k == "tokens" || strings.HasSuffix(k, "_tokens") {
+			return false
+		}
+		return strings.Contains(k, "password") || strings.Contains(k, "secret") ||
+			strings.Contains(k, "authorization") || strings.Contains(k, "cookie") ||
+			strings.Contains(k, "api_key") || strings.Contains(k, "apikey") ||
+			(strings.Contains(k, "token") && !strings.Contains(k, "tokenizer"))
 	}
 }
