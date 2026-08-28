@@ -4,15 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
 )
 
-// DetectBuildBotFlagsWithProgress 用 Build 号自带 SSO 拉取 grok.com 首页 botFlagSource。
-// 不走 grok-4.5 可用性探测，也不改账号启用状态。
+// DetectBuildBotFlagsWithProgress 对 Build 号做号级风控确认：同一号用粘性
+// {account}+n 换口打思考请求。不走 grok-4.5 探活，不改启用状态，不需要 SSO。
 func (s *Service) DetectBuildBotFlagsWithProgress(ctx context.Context, ids []uint64, all bool, progress BatchProgressObserver, itemObserver BuildDetectItemObserver) (int, int, error) {
 	if all == (len(ids) > 0) {
 		return 0, 0, invalidInput("必须明确选择全部账号或提供非空账号 ID")
@@ -59,7 +58,7 @@ func (s *Service) DetectBuildBotFlagsWithProgress(ctx context.Context, ids []uin
 		if item.Reason != "" {
 			return item, fmt.Errorf("%s", item.Reason)
 		}
-		return item, fmt.Errorf("SSO 风控检测失败")
+		return item, fmt.Errorf("风控检测失败")
 	}, func(index int, result batch.Result[BuildDetectItemResult]) {
 		observerMu.Lock()
 		defer observerMu.Unlock()
@@ -75,14 +74,14 @@ func (s *Service) DetectBuildBotFlagsWithProgress(ctx context.Context, ids []uin
 	return summary.Succeeded, summary.Failed, errors.Join(err, progressErr)
 }
 
-// InspectAndPersistPageBotFlag 供反降智路径在 K 个 ExitIP 失败后调用。
+// InspectAndPersistPageBotFlag 供反降智路径在失败出口达阈值后做号级确认。
 func (s *Service) InspectAndPersistPageBotFlag(ctx context.Context, credential accountdomain.Credential) (int, error) {
 	item := s.inspectBuildPageBotFlag(ctx, credential)
 	if item.Outcome != BuildDetectOutcomeOK && item.Outcome != BuildDetectOutcomeFlagged {
 		if item.Reason != "" {
 			return 0, fmt.Errorf("%s", item.Reason)
 		}
-		return 0, fmt.Errorf("SSO 风控检测失败")
+		return 0, fmt.Errorf("风控检测失败")
 	}
 	return item.BotFlagSource, nil
 }
@@ -98,43 +97,7 @@ func (s *Service) detectBuildPageBotFlag(ctx context.Context, id uint64) BuildDe
 }
 
 func (s *Service) inspectBuildPageBotFlag(ctx context.Context, value accountdomain.Credential) BuildDetectItemResult {
-	item := BuildDetectItemResult{AccountID: value.ID, Name: value.Name, Email: value.Email, Outcome: BuildDetectOutcomeFailed}
-	if value.Provider != accountdomain.ProviderBuild {
-		item.Reason = "仅 Grok Build 账号支持 SSO 风控检测"
-		return item
-	}
-	if strings.TrimSpace(value.EncryptedSSOToken) == "" {
-		item.Reason = "未配置 SSO"
-		return item
-	}
-	ssoToken, err := s.cipher.Decrypt(value.EncryptedSSOToken)
-	if err != nil {
-		item.Reason = "解密 SSO 失败"
-		return item
-	}
-	inspector, ok := s.providers.HomeBotFlag()
-	if !ok {
-		item.Reason = "Grok Web 检测能力未注册"
-		return item
-	}
-	source, status, err := inspector.InspectHomeBotFlag(ctx, ssoToken)
-	item.HTTPStatus = status
-	if err != nil {
-		item.Reason = err.Error()
-		return item
-	}
-	if persistErr := s.persistPageBotFlag(ctx, value, source); persistErr != nil {
-		item.Reason = persistErr.Error()
-		return item
-	}
-	item.BotFlagSource = source
-	item.Reason = fmt.Sprintf("botFlagSource=%d", source)
-	if source == 1 || source == 2 {
-		item.Outcome = BuildDetectOutcomeFlagged
-		return item
-	}
-	item.Outcome = BuildDetectOutcomeOK
-	return item
+	return s.inspectBuildBotRisk(ctx, value)
 }
 
 func (s *Service) persistPageBotFlag(ctx context.Context, value accountdomain.Credential, source int) error {
@@ -153,4 +116,3 @@ func (s *Service) persistPageBotFlag(ctx context.Context, value accountdomain.Cr
 	s.invalidateBuildBotFlagCache()
 	return nil
 }
-

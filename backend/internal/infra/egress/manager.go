@@ -1223,7 +1223,7 @@ func normalizeProxyAccount(value string) string {
 	}
 	value = strings.Map(func(character rune) rune {
 		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-			(character >= '0' && character <= '9') || character == '_' || character == '-' {
+			(character >= '0' && character <= '9') || character == '_' || character == '-' || character == '+' {
 			return character
 		}
 		return '_'

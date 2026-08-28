@@ -262,7 +262,7 @@ const (
 	BuildDetectOutcomeInvalid BuildDetectOutcome = "invalid"
 	// BuildDetectOutcomeFailed 表示探测失败但未判定为永久失效（网络/5xx/临时额度等）。
 	BuildDetectOutcomeFailed BuildDetectOutcome = "failed"
-	// BuildDetectOutcomeFlagged 表示 grok.com 页面 botFlagSource 为 1 或 2。
+	// BuildDetectOutcomeFlagged 表示号级风控确认（K 个粘性口均无流式思考）。
 	BuildDetectOutcomeFlagged BuildDetectOutcome = "flagged"
 )
 

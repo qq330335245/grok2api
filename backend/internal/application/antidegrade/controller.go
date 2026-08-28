@@ -39,7 +39,8 @@ type AccountDisabler interface {
 	Disable(context.Context, uint64) error
 }
 
-// PageBotFlagInspector reads grok.com homepage botFlagSource from the Build account's own SSO.
+// PageBotFlagInspector confirms account-level bot risk after the hot path has
+// already soft-quarantined the credential. It must not change density or consecutive-fail state.
 type PageBotFlagInspector interface {
 	Inspect(ctx context.Context, credential accountdomain.Credential) (int, error)
 }
@@ -509,7 +510,7 @@ func (c *Controller) inspectAndMaybeBan(credential accountdomain.Credential, las
 	if c == nil || c.inspector == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	source, err := c.inspector.Inspect(ctx, credential)
 	if err != nil {
