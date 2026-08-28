@@ -3,6 +3,7 @@ package antidegrade
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -282,5 +283,132 @@ func TestIdleStreamCoolsIPWithoutCountingTowardK(t *testing.T) {
 	controller.OnMissingThinking(context.Background(), cred, 2, "10.0.0.2")
 	if !controller.AccountQuarantined(7) {
 		t.Fatal("two withholds must quarantine")
+	}
+}
+
+func densityOf(controller *Controller, ip string, window time.Duration, now time.Time) int {
+	controller.ledger.mu.Lock()
+	defer controller.ledger.mu.Unlock()
+	return controller.ledger.densityCount(controller.ledger.ip(ip), window, now)
+}
+
+func TestAdmitOccupiesDensityBeforeRequestCompletes(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	nodes := staticNodes{
+		{ID: 1, Enabled: true, ExitIP: "10.0.0.1"},
+		{ID: 2, Enabled: true, ExitIP: "10.0.0.2"},
+	}
+	window := 15 * time.Minute
+	controller := New(Config{
+		Enabled: true, Mode: ModeEnforce, DensityWindow: window, DensityMaxAccounts: 1,
+		StateFile: t.TempDir() + "/l.json",
+	}, nodes, nil, nil)
+	controller.ledger.now = func() time.Time { return now }
+
+	first, err := controller.Admit(context.Background(), accountdomain.Credential{ID: 1, Provider: accountdomain.ProviderBuild}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := controller.Admit(context.Background(), accountdomain.Credential{ID: 2, Provider: accountdomain.ProviderBuild}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == 0 || second == 0 || first == second {
+		t.Fatalf("unbound accounts must land on different IPs, first=%d second=%d", first, second)
+	}
+	if densityOf(controller, "10.0.0.1", window, now) != 1 || densityOf(controller, "10.0.0.2", window, now) != 1 {
+		t.Fatalf("admit must occupy both IPs before completion, d1=%d d2=%d", densityOf(controller, "10.0.0.1", window, now), densityOf(controller, "10.0.0.2", window, now))
+	}
+	if _, err := controller.Admit(context.Background(), accountdomain.Credential{ID: 3, Provider: accountdomain.ProviderBuild}, nil); !errors.Is(err, ErrNoEligibleExitIP) {
+		t.Fatalf("all IPs at cap must 503, err=%v", err)
+	}
+}
+
+func TestAdmitSameAccountDoesNotConsumeSecondDensitySlot(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	nodes := staticNodes{{ID: 1, Enabled: true, ExitIP: "10.0.0.1"}}
+	window := 15 * time.Minute
+	controller := New(Config{
+		Enabled: true, Mode: ModeEnforce, DensityWindow: window, DensityMaxAccounts: 1,
+		StateFile: t.TempDir() + "/l.json",
+	}, nodes, nil, nil)
+	controller.ledger.now = func() time.Time { return now }
+	cred := accountdomain.Credential{ID: 7, Provider: accountdomain.ProviderBuild, EgressNodeID: 1}
+	if got, err := controller.Admit(context.Background(), cred, nil); err != nil || got != 0 {
+		t.Fatalf("first binding admit override=%d err=%v", got, err)
+	}
+	if got, err := controller.Admit(context.Background(), cred, nil); err != nil || got != 0 {
+		t.Fatalf("same account must keep binding, override=%d err=%v", got, err)
+	}
+	if got := densityOf(controller, "10.0.0.1", window, now); got != 1 {
+		t.Fatalf("density=%d, want 1", got)
+	}
+}
+
+func TestAdmitBoundNodeFullFailsOverWithoutUnbinding(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	nodes := staticNodes{
+		{ID: 1, Enabled: true, ExitIP: "10.0.0.1"},
+		{ID: 2, Enabled: true, ExitIP: "10.0.0.2"},
+	}
+	window := 15 * time.Minute
+	controller := New(Config{
+		Enabled: true, Mode: ModeEnforce, DensityWindow: window, DensityMaxAccounts: 1,
+		StateFile: t.TempDir() + "/l.json",
+	}, nodes, nil, nil)
+	controller.ledger.now = func() time.Time { return now }
+	owner := accountdomain.Credential{ID: 1, Provider: accountdomain.ProviderBuild, EgressNodeID: 1}
+	if got, err := controller.Admit(context.Background(), owner, nil); err != nil || got != 0 {
+		t.Fatalf("owner binding override=%d err=%v", got, err)
+	}
+	other := accountdomain.Credential{ID: 2, Provider: accountdomain.ProviderBuild, EgressNodeID: 1}
+	got, err := controller.Admit(context.Background(), other, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Fatalf("full bound IP must fail over for this request, override=%d", got)
+	}
+	if owner.EgressNodeID != 1 || other.EgressNodeID != 1 {
+		t.Fatal("admit must not rewrite stored bindings")
+	}
+}
+
+func TestAdmitConcurrentAccountsRespectDensityCap(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	nodes := staticNodes{{ID: 1, Enabled: true, ExitIP: "10.0.0.1"}}
+	window := 15 * time.Minute
+	controller := New(Config{
+		Enabled: true, Mode: ModeEnforce, DensityWindow: window, DensityMaxAccounts: 1,
+		StateFile: t.TempDir() + "/l.json",
+	}, nodes, nil, nil)
+	controller.ledger.now = func() time.Time { return now }
+
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = controller.Admit(context.Background(), accountdomain.Credential{ID: uint64(i + 1), Provider: accountdomain.ProviderBuild}, nil)
+		}(i)
+	}
+	wg.Wait()
+	accepted, rejected := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, ErrNoEligibleExitIP):
+			rejected++
+		default:
+			t.Fatalf("unexpected admit error: %v", err)
+		}
+	}
+	if accepted != 1 || rejected != 7 {
+		t.Fatalf("accepted=%d rejected=%d, want 1 and 7", accepted, rejected)
+	}
+	if got := densityOf(controller, "10.0.0.1", window, now); got != 1 {
+		t.Fatalf("density=%d, want 1", got)
 	}
 }

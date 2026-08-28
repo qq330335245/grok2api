@@ -229,13 +229,11 @@ func (c *Controller) nodeCoolingLocked(node Node, now time.Time) bool {
 	return false
 }
 
-func (c *Controller) allowed(cfg Config, node Node, accountID uint64, excluded map[uint64]bool, now time.Time) bool {
+func (c *Controller) nodeEligibleLocked(cfg Config, node Node, accountID uint64, excluded map[uint64]bool, now time.Time) bool {
 	if node.ID == 0 || !node.Enabled || excluded[node.ID] || !hasRealExitIP(node) {
 		return false
 	}
 	key := exitKey(node)
-	c.ledger.mu.Lock()
-	defer c.ledger.mu.Unlock()
 	c.ledger.rememberNode(key, node.ID)
 	if c.nodeCoolingLocked(node, now) {
 		return false
@@ -247,41 +245,40 @@ func (c *Controller) allowed(cfg Config, node Node, accountID uint64, excluded m
 	return c.ledger.densityCount(state, cfg.DensityWindow, now) < cfg.DensityMaxAccounts
 }
 
-func (c *Controller) pick(cfg Config, nodes []Node, accountID, preferred uint64, excluded map[uint64]bool, now time.Time) (uint64, error) {
+func (c *Controller) occupyLocked(node Node, accountID uint64, window time.Duration, now time.Time) {
+	key := exitKey(node)
+	if key == "" {
+		return
+	}
+	c.ledger.rememberNode(key, node.ID)
+	c.ledger.noteWindow(key, accountID, window, now)
+}
+
+func (c *Controller) pickLocked(cfg Config, nodes []Node, accountID, preferred uint64, excluded map[uint64]bool, now time.Time) (Node, error) {
 	type candidate struct {
 		node  Node
 		score float64
 	}
 	var options []candidate
-	c.ledger.mu.Lock()
 	for _, node := range nodes {
-		if node.ID == 0 || !node.Enabled || excluded[node.ID] || !hasRealExitIP(node) {
+		if !c.nodeEligibleLocked(cfg, node, accountID, excluded, now) {
 			continue
 		}
 		key := exitKey(node)
-		c.ledger.rememberNode(key, node.ID)
-		if c.nodeCoolingLocked(node, now) {
-			continue
-		}
-		state := c.ledger.ip(key)
-		if !c.ledger.accountInWindow(state, accountID, cfg.DensityWindow, now) && c.ledger.densityCount(state, cfg.DensityWindow, now) >= cfg.DensityMaxAccounts {
-			continue
-		}
-		options = append(options, candidate{node: node, score: c.ledger.score(state, cfg.ScorePrior)})
+		options = append(options, candidate{node: node, score: c.ledger.score(c.ledger.ip(key), cfg.ScorePrior)})
 	}
-	c.ledger.mu.Unlock()
 	if len(options) == 0 {
-		return 0, ErrNoEligibleExitIP
+		return Node{}, ErrNoEligibleExitIP
 	}
 	if preferred != 0 {
 		for _, option := range options {
 			if option.node.ID == preferred {
-				return preferred, nil
+				return option.node, nil
 			}
 		}
 	}
 	if cfg.ExploreRatio > 0 && c.rng.Float64() < cfg.ExploreRatio {
-		return options[c.rng.Intn(len(options))].node.ID, nil
+		return options[c.rng.Intn(len(options))].node, nil
 	}
 	best := options[0]
 	for _, option := range options[1:] {
@@ -289,10 +286,12 @@ func (c *Controller) pick(cfg Config, nodes []Node, accountID, preferred uint64,
 			best = option
 		}
 	}
-	return best.node.ID, nil
+	return best.node, nil
 }
 
 // Admit returns a ForcedEgress node ID. Zero means "use the account binding".
+// Density is a hard cap on distinct accounts per ExitIP in the window: the
+// chosen IP is occupied before the request runs. Binding is only a preference.
 func (c *Controller) Admit(ctx context.Context, credential accountdomain.Credential, excluded map[uint64]bool) (uint64, error) {
 	if c == nil || !c.ActiveFor(credential.Provider) {
 		return 0, nil
@@ -308,19 +307,34 @@ func (c *Controller) Admit(ctx context.Context, credential accountdomain.Credent
 	nodes = filterNodes(nodes, credential.Provider)
 	now := c.ledger.now()
 	preferred := credential.EgressNodeID
+
+	c.ledger.mu.Lock()
+	var chosen Node
+	keepBinding := false
 	if preferred != 0 {
-		if node, ok := c.nodeByID(nodes, preferred); ok && c.allowed(cfg, node, credential.ID, excluded, now) {
-			return 0, nil
+		if node, ok := c.nodeByID(nodes, preferred); ok && c.nodeEligibleLocked(cfg, node, credential.ID, excluded, now) {
+			chosen = node
+			keepBinding = true
 		}
 	}
-	picked, err := c.pick(cfg, nodes, credential.ID, 0, excluded, now)
-	if err != nil {
-		return 0, err
+	if chosen.ID == 0 {
+		node, pickErr := c.pickLocked(cfg, nodes, credential.ID, 0, excluded, now)
+		if pickErr != nil {
+			c.ledger.mu.Unlock()
+			return 0, pickErr
+		}
+		chosen = node
+		if chosen.ID == preferred {
+			keepBinding = true
+		}
 	}
-	if picked == preferred {
+	c.occupyLocked(chosen, credential.ID, cfg.DensityWindow, now)
+	c.ledger.mu.Unlock()
+	_ = c.ledger.persist()
+	if keepBinding {
 		return 0, nil
 	}
-	return picked, nil
+	return chosen.ID, nil
 }
 
 func (c *Controller) resolveKeyLocked(nodeID uint64, exitIP string) string {
