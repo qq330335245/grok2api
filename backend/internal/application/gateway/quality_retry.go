@@ -18,6 +18,8 @@ import (
 
 const (
 	ErrorQualityDegraded             = "quality_degraded"
+	ErrorEgressUnavailable           = "egress_unavailable"
+	ErrorAccountQuarantined          = "account_quarantined"
 	qualityRetryFailOpen             = "fail_open"
 	qualityRetryFailClosed           = "fail_closed"
 	defaultQualityMaxAttempts        = 6

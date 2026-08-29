@@ -13,6 +13,7 @@ import (
 
 const (
 	reasonDirtyIP    = "dirty_ip"
+	reasonEgressDown = "egress_down"
 	reasonFarm       = "farm"
 	reasonDensity    = "density"
 	reasonQuarantine = "consecutive_ip_no_thinking"

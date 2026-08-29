@@ -382,6 +382,29 @@ func TestIdleStreamCoolsIPWithoutCountingTowardK(t *testing.T) {
 	}
 }
 
+func TestProxyFailureCoolsIPWithoutQuarantine(t *testing.T) {
+	nodes := staticNodes{
+		{ID: 1, Enabled: true, ExitIP: "10.0.0.1"},
+		{ID: 2, Enabled: true, ExitIP: "10.0.0.2"},
+	}
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, AccountIPFailThreshold: 2, StateFile: t.TempDir() + "/l.json"}, nodes, nil, nil)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	controller.ledger.now = func() time.Time { return now }
+	cred := accountdomain.Credential{ID: 9, Provider: accountdomain.ProviderBuild}
+	controller.OnProxyFailure(cred, 1, "10.0.0.1")
+	controller.OnProxyFailure(cred, 2, "10.0.0.2")
+	if controller.AccountQuarantined(9) {
+		t.Fatal("proxy failures must not quarantine")
+	}
+	if _, err := controller.Admit(context.Background(), cred, nil); !errors.Is(err, ErrNoEligibleExitIP) {
+		t.Fatalf("proxy-down IPs should be ineligible: %v", err)
+	}
+	controller.ledger.now = func() time.Time { return now.Add(3 * time.Minute) }
+	if _, err := controller.Admit(context.Background(), cred, nil); err != nil {
+		t.Fatalf("proxy-down cooldown must expire: %v", err)
+	}
+}
+
 func densityOf(controller *Controller, ip string, window time.Duration, now time.Time) int {
 	controller.ledger.mu.Lock()
 	defer controller.ledger.mu.Unlock()

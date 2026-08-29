@@ -431,6 +431,28 @@ func (c *Controller) OnSuccess(accountID, nodeID uint64, exitIP string) {
 	_ = c.ledger.persist()
 }
 
+const proxyDownCooldown = 2 * time.Minute
+
+func (c *Controller) OnProxyFailure(credential accountdomain.Credential, nodeID uint64, exitIP string) {
+	if c == nil || !c.Enabled() || !c.AppliesTo(credential.Provider) {
+		return
+	}
+	now := c.ledger.now()
+	c.ledger.mu.Lock()
+	key := c.resolveKeyLocked(nodeID, exitIP)
+	if key == "" {
+		c.ledger.mu.Unlock()
+		return
+	}
+	c.ledger.rememberNode(key, nodeID)
+	if c.config().Enforce() {
+		c.ledger.cool(key, reasonEgressDown, now.Add(proxyDownCooldown))
+	}
+	c.ledger.mu.Unlock()
+	_ = c.ledger.persist()
+	c.logger.Info("antidegrade_proxy_down", "account_id", credential.ID, "node_id", nodeID, "exit_ip", key)
+}
+
 func (c *Controller) OnIdleStream(credential accountdomain.Credential, nodeID uint64, exitIP string) {
 	if c == nil || !c.Enabled() || !c.AppliesTo(credential.Provider) {
 		return

@@ -1096,6 +1096,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	qualityHoldEnabled := shouldHoldQualityStream(input, ownership, route, operation, holdCfg)
 	var attemptEgressNodeID uint64
 	var antiDegradePin uint64
+	var noExitFailovers int
 	var peekedStreamedThinking bool
 	noteAntiMiss := func(credential accountdomain.Credential, usedNode uint64) {
 		if anti == nil || !anti.ActiveFor(credential.Provider) {
@@ -1394,22 +1395,33 @@ attemptLoop:
 			if admitErr != nil {
 				lease.Release()
 				lastErr = admitErr
+				code := ErrorEgressUnavailable
 				public := "没有可用的干净出口 IP"
 				if errors.Is(admitErr, antidegrade.ErrAccountQuarantined) {
+					code = ErrorAccountQuarantined
 					public = "账号因缺少推理被隔离"
 				}
 				lastFailure = &UpstreamFailure{
-					HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
+					HTTPStatus: http.StatusServiceUnavailable, Code: code,
 					PublicMessage: public, AccountID: lease.Credential.ID, AccountName: lease.Credential.Name,
 					Cause: admitErr,
 				}
 				antiDegradePin = 0
-				if errors.Is(admitErr, antidegrade.ErrNoEligibleExitIP) || errors.Is(admitErr, antidegrade.ErrAccountQuarantined) {
+				if errors.Is(admitErr, antidegrade.ErrNoEligibleExitIP) {
+					noExitFailovers++
+					s.logger.Info("antidegrade_admit_failover", "request_id", input.RequestID, "account_id", lease.Credential.ID, "error", admitErr, "no_exit", noExitFailovers)
+					if noExitFailovers >= 3 {
+						break attemptLoop
+					}
+					continue
+				}
+				if errors.Is(admitErr, antidegrade.ErrAccountQuarantined) {
 					s.logger.Info("antidegrade_admit_failover", "request_id", input.RequestID, "account_id", lease.Credential.ID, "error", admitErr)
 					continue
 				}
 				break attemptLoop
 			}
+			noExitFailovers = 0
 			attemptEgressNodeID = picked
 		}
 		if limited, ok := s.activeTeamModelRateLimit(lease.Credential, route.UpstreamModel, time.Now().UTC()); ok {
@@ -1469,6 +1481,13 @@ attemptLoop:
 				continue
 			}
 			lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
+			usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
+			if usedNode != 0 {
+				excludedEgressNodes[usedNode] = true
+			}
+			if anti != nil && anti.ActiveFor(credential.Provider) {
+				anti.OnProxyFailure(credential, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
+			}
 			if !isRetryableTransportFailure(credential.Provider, err) {
 				break
 			}
