@@ -144,6 +144,7 @@ func (s *qualityScanState) signals() QualityStreamSignals {
 		VisibleTokens:    visible,
 		ReasoningTokens:  max(s.reasoningTokens, s.usage.ReasoningTokens),
 		OutputTokens:     output,
+		SemanticOutput:   s.semanticOutput,
 		Terminal:         s.terminal,
 	}
 }
@@ -529,10 +530,7 @@ func finishQualityPeek(held *bytes.Buffer, pump *qualityReadPump, state *quality
 	}
 	state.terminal = true
 	signals := state.signals()
-	if !signals.HasThinking && signals.ReasoningTokens <= 0 && signals.OutputTokens <= 0 && signals.VisibleTokens <= 0 {
-		if state.semanticOutput {
-			return newPrefixReplay(held, pump), QualityDeliver, state.peekUsage(), state.responseID, nil
-		}
+	if !signals.HasThinking && !signals.SemanticOutput && signals.ReasoningTokens <= 0 && signals.OutputTokens <= 0 && signals.VisibleTokens <= 0 {
 		return newPrefixReplay(held, pump), QualityWait, state.peekUsage(), state.responseID, errQualityEmptyStream
 	}
 	return newPrefixReplay(held, pump), ClassifyQualityHold(signals, cfg.MinOutputTokens), state.peekUsage(), state.responseID, nil

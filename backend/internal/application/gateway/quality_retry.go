@@ -63,8 +63,11 @@ type QualityStreamSignals struct {
 	VisibleTokens    int64
 	ReasoningTokens  int64
 	OutputTokens     int64
-	Terminal         bool
-	HoldExpired      bool
+	// SemanticOutput is a tool/function call. It is the model's first action
+	// and must not bypass the thinking-before-answer rule.
+	SemanticOutput bool
+	Terminal       bool
+	HoldExpired    bool
 }
 
 // QualityVerdict is the hold decision for one upstream stream.
@@ -124,14 +127,15 @@ func (s *Service) qualityRetryConfig() QualityRetryRuntime {
 // ClassifyQualityHold decides whether a held stream may be forwarded.
 // Thinking always precedes the answer. The only gold standard is streamed
 // reasoning_content / reasoning_text.delta / thinking_content (HasThinking).
-// The first visible content delta is the decision point: if thinking already
-// appeared, deliver; if not, withhold immediately. Usage.reasoning_tokens and
-// usage.output_tokens are ignored — degraded accounts still fill those at EOF.
+// The first visible content delta or tool/function call is the decision point:
+// if thinking already appeared, deliver; if not, withhold immediately.
+// Usage.reasoning_tokens and usage.output_tokens are ignored — degraded
+// accounts still fill those at EOF.
 func ClassifyQualityHold(sig QualityStreamSignals, _ int64) QualityVerdict {
 	if sig.HasThinking {
 		return QualityDeliver
 	}
-	if sig.VisibleTokens > 0 {
+	if sig.VisibleTokens > 0 || sig.SemanticOutput {
 		return QualityWithhold
 	}
 	return QualityWait

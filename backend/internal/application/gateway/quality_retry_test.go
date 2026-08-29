@@ -40,6 +40,8 @@ func TestClassifyQualityHold(t *testing.T) {
 		{name: "thinking before content delivers", sig: QualityStreamSignals{HasThinking: true, VisibleTokens: 1}, want: QualityDeliver},
 		{name: "usage reasoning tokens alone wait", sig: QualityStreamSignals{ReasoningTokens: 40, OutputTokens: 80, Terminal: true}, want: QualityWait},
 		{name: "first content no think withhold", sig: QualityStreamSignals{VisibleTokens: 1}, want: QualityWithhold},
+		{name: "tool call no think withhold", sig: QualityStreamSignals{SemanticOutput: true}, want: QualityWithhold},
+		{name: "thinking then tool call delivers", sig: QualityStreamSignals{HasThinking: true, SemanticOutput: true}, want: QualityDeliver},
 		{name: "visible no think withhold", sig: QualityStreamSignals{VisibleTokens: 32, Terminal: true}, want: QualityWithhold},
 		{name: "output usage only waits", sig: QualityStreamSignals{OutputTokens: 40, Terminal: true}, want: QualityWait},
 		{name: "short content ignores inflated usage", sig: QualityStreamSignals{VisibleTokens: 1, OutputTokens: 80, Terminal: true}, want: QualityWithhold},
@@ -897,7 +899,7 @@ func TestPeekQualityStreamTerminalSemanticOutputIsNotEmpty(t *testing.T) {
 			stream: sse(
 				`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{}"}]}}`,
 			),
-			wantVerdict: QualityDeliver,
+			wantVerdict: QualityWithhold,
 		},
 		{
 			name:     "responses streamed function call",
@@ -906,7 +908,7 @@ func TestPeekQualityStreamTerminalSemanticOutputIsNotEmpty(t *testing.T) {
 				`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
 				`data: {"type":"response.completed","response":{"id":"resp_1","output":[]}}`,
 			),
-			wantVerdict: QualityDeliver,
+			wantVerdict: QualityWithhold,
 		},
 		{
 			name:     "chat tool call",
@@ -914,7 +916,7 @@ func TestPeekQualityStreamTerminalSemanticOutputIsNotEmpty(t *testing.T) {
 			stream: sse(
 				`data: {"choices":[{"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
 			),
-			wantVerdict: QualityDeliver,
+			wantVerdict: QualityWithhold,
 		},
 		{
 			name:     "anthropic tool use",
@@ -923,7 +925,7 @@ func TestPeekQualityStreamTerminalSemanticOutputIsNotEmpty(t *testing.T) {
 				`data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_1","name":"read_file","input":{}}}`,
 				`data: {"type":"message_stop"}`,
 			),
-			wantVerdict: QualityDeliver,
+			wantVerdict: QualityWithhold,
 		},
 		{
 			name:     "responses aggregate long text",
@@ -941,6 +943,26 @@ func TestPeekQualityStreamTerminalSemanticOutputIsNotEmpty(t *testing.T) {
 				`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":"`+shortText+`"}]}]}}`,
 			),
 			wantVerdict: QualityWithhold,
+		},
+		{
+			name:     "responses function call arguments without thinking",
+			protocol: qualityProtocolResponses,
+			stream: sse(
+				`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"bash","arguments":""}}`,
+				`data: {"type":"response.function_call_arguments.delta","delta":"{\"command\":\"ls\"}"}`,
+				`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"output_tokens":81,"output_tokens_details":{"reasoning_tokens":0}}}}`,
+			),
+			wantVerdict: QualityWithhold,
+		},
+		{
+			name:     "responses thinking then function call",
+			protocol: qualityProtocolResponses,
+			stream: sse(
+				`data: {"type":"response.reasoning_summary_text.delta","delta":"need a listing"}`,
+				`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"bash","arguments":""}}`,
+				`data: {"type":"response.completed","response":{"id":"resp_1"}}`,
+			),
+			wantVerdict: QualityDeliver,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
