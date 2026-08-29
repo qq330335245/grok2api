@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -24,6 +25,15 @@ func TestFormatProbeTargetIncludesNodeAndExitIP(t *testing.T) {
 	}
 	if formatProbeTarget(BotRiskProbeAttempt{Identity: "acc+2"}) != "acc+2" {
 		t.Fatal("identity-only target")
+	}
+}
+
+func TestFormatFailedProbeReasonIncludesStatusAndDetail(t *testing.T) {
+	got := formatFailedProbeReason(BotRiskProbeAttempt{
+		Identity: "acc+1", NodeName: "阿里云ipv6动态粘性", ExitIP: "2a11:6c7::1", Status: 403, Detail: "access denied",
+	})
+	if !strings.Contains(got, "acc+1") || !strings.Contains(got, "HTTP 403") || !strings.Contains(got, "access denied") {
+		t.Fatalf("reason=%q", got)
 	}
 }
 
@@ -77,6 +87,7 @@ type scriptedThinkingAdapter struct {
 	sse     []string
 	status  int
 	errBody []byte
+	fail    error
 }
 
 func (a *scriptedThinkingAdapter) Provider() accountdomain.Provider {
@@ -86,6 +97,9 @@ func (a *scriptedThinkingAdapter) ForwardResponse(_ context.Context, request pro
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls = append(a.calls, request.Credential.EgressIdentity)
+	if a.fail != nil {
+		return nil, a.fail
+	}
 	if a.status != 0 && a.status != http.StatusOK {
 		body := a.errBody
 		if body == nil {
@@ -195,6 +209,9 @@ func TestInspectBuildBotRiskDoesNotNeedSSO(t *testing.T) {
 	if item.Outcome != BuildDetectOutcomeFailed {
 		t.Fatalf("empty stream must fail closed: %#v", item)
 	}
+	if !strings.Contains(item.Reason, "空流") {
+		t.Fatalf("empty stream reason=%q", item.Reason)
+	}
 	if len(adapter.calls) != 1 {
 		t.Fatalf("inconclusive should stop without a second miss: %v", adapter.calls)
 	}
@@ -250,5 +267,59 @@ func TestInspectBuildBotRiskQuotaExhausted(t *testing.T) {
 	latest, err := repo.Get(ctx, account.ID)
 	if err != nil || latest.BuildBotFlagSource == 2 {
 		t.Fatalf("quota must not persist botflag=2: %#v err=%v", latest, err)
+	}
+}
+
+func TestInspectBuildBotRiskSurfacesTransportAndHTTPFailures(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "bot-risk-fail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessToken, err := cipher.Encrypt("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := relational.NewAccountRepository(database)
+	account, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
+		Provider: accountdomain.ProviderBuild, Name: "fail", UserID: "user-fail",
+		SourceKey: "bot-risk-fail", EncryptedAccessToken: accessToken,
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account.EgressIdentity = "sticky_acc"
+
+	adapter := &scriptedThinkingAdapter{fail: errors.New("socks connect tcp 127.0.0.1:10800: i/o timeout")}
+	service := NewService(repo, nil, nil, nil, provider.NewRegistry(adapter), cipher, nil)
+	item := service.inspectBuildBotRisk(ctx, account)
+	if item.Outcome != BuildDetectOutcomeFailed || item.BotFlagSource != 0 {
+		t.Fatalf("transport item=%#v", item)
+	}
+	if !strings.Contains(item.Reason, "i/o timeout") {
+		t.Fatalf("transport reason=%q", item.Reason)
+	}
+	if len(item.Attempts) != 1 || !strings.Contains(item.Attempts[0].Detail, "i/o timeout") {
+		t.Fatalf("transport attempts=%#v", item.Attempts)
+	}
+
+	adapter.fail = nil
+	adapter.status = http.StatusForbidden
+	adapter.errBody = []byte(`{"error":{"code":7,"message":"This page is out of date. Reload to continue."}}`)
+	item = service.inspectBuildBotRisk(ctx, account)
+	if item.Outcome != BuildDetectOutcomeFailed || item.HTTPStatus != http.StatusForbidden {
+		t.Fatalf("http item=%#v", item)
+	}
+	if !strings.Contains(item.Reason, "HTTP 403") || !strings.Contains(item.Reason, "out of date") {
+		t.Fatalf("http reason=%q", item.Reason)
 	}
 }

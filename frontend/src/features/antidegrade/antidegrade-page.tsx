@@ -534,7 +534,7 @@ function QuarantinePanel({ status, locale, onStatus }: { status: AntiDegradeStat
                   <div className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
                     {item.attempts.map((attempt, index) => (
                       <div key={`${attempt.identity ?? "attempt"}-${index}`} className="break-all">
-                        {[attempt.identity, attempt.nodeName, attempt.exitIp].filter(Boolean).join(" · ") || "—"}
+                        {[attempt.identity, attempt.nodeName, attempt.exitIp, attempt.status ? `HTTP ${attempt.status}` : "", attempt.detail].filter(Boolean).join(" · ") || "—"}
                       </div>
                     ))}
                   </div>

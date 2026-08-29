@@ -189,6 +189,47 @@ func formatProbeTarget(attempt BotRiskProbeAttempt) string {
 	return strings.Join(parts, " ")
 }
 
+func formatFailedProbeReason(attempt BotRiskProbeAttempt) string {
+	parts := make([]string, 0, 4)
+	if target := formatProbeTarget(attempt); target != "" {
+		parts = append(parts, target)
+	}
+	if attempt.Status > 0 {
+		parts = append(parts, fmt.Sprintf("HTTP %d", attempt.Status))
+	}
+	detail := strings.TrimSpace(attempt.Detail)
+	if detail == "" {
+		detail = "无有效思考样本"
+	}
+	parts = append(parts, detail)
+	return strings.Join(parts, " · ")
+}
+
+func summarizeProbeFailure(status int, body []byte, err error) string {
+	if err != nil {
+		return truncateRunes(strings.TrimSpace(err.Error()), 160)
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) > 0 && bytes.Contains(bytes.ToLower(trimmed), []byte("<html")) {
+		return "HTML 响应（可能是 Cloudflare 挑战）"
+	}
+	code, _, message := provider.ExtractUpstreamErrorMetadata(body)
+	switch {
+	case strings.TrimSpace(message) != "" && strings.TrimSpace(code) != "":
+		return truncateRunes(strings.TrimSpace(code)+": "+strings.TrimSpace(message), 160)
+	case strings.TrimSpace(message) != "":
+		return truncateRunes(strings.TrimSpace(message), 160)
+	case strings.TrimSpace(code) != "":
+		return truncateRunes(strings.TrimSpace(code), 160)
+	case len(trimmed) > 0:
+		return truncateRunes(string(trimmed), 160)
+	case status > 0:
+		return fmt.Sprintf("上游返回 HTTP %d", status)
+	default:
+		return "请求失败"
+	}
+}
+
 func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.Credential) BuildDetectItemResult {
 	item := BuildDetectItemResult{AccountID: value.ID, Name: value.Name, Email: value.Email, Outcome: BuildDetectOutcomeFailed}
 	if value.Provider != accountdomain.ProviderBuild {
@@ -205,7 +246,12 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 	for n := 1; n <= botRiskProbeAttempts; n++ {
 		if ctx.Err() != nil {
 			item.Attempts = attempts
-			item.Reason = ctx.Err().Error()
+			item.Reason = "检测取消"
+			if len(attempts) > 0 {
+				item.Reason = "检测取消 · " + formatFailedProbeReason(attempts[len(attempts)-1])
+			} else if err := ctx.Err(); err != nil {
+				item.Reason = "检测取消 · " + err.Error()
+			}
 			return item
 		}
 		scan, status, body, attempt, probeErr := s.probeThinkingOnStickyIdentity(ctx, value, billing, n)
@@ -215,7 +261,7 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 			item.HTTPStatus = status
 		}
 		if probeErr != nil {
-			item.Reason = probeErr.Error()
+			item.Reason = formatFailedProbeReason(attempt)
 			return item
 		}
 		if quotaItem, ok := s.finishBotRiskQuotaRejection(ctx, value, billing, attempt.Identity, status, body); ok {
@@ -225,7 +271,7 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 			}
 			return quotaItem
 		}
-		s.logger.Info("bot_risk_probe_attempt", "account_id", value.ID, "identity", attempt.Identity, "node", attempt.NodeName, "exit_ip", attempt.ExitIP, "status", status, "verdict", scan.verdict.String(), "event", scan.event, "delta", scan.delta)
+		s.logger.Info("bot_risk_probe_attempt", "account_id", value.ID, "identity", attempt.Identity, "node", attempt.NodeName, "exit_ip", attempt.ExitIP, "status", status, "verdict", scan.verdict.String(), "event", scan.event, "delta", scan.delta, "detail", attempt.Detail)
 		switch scan.verdict {
 		case probeThinking:
 			if persistErr := s.persistPageBotFlag(ctx, value, 0); persistErr != nil {
@@ -239,7 +285,7 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 		case probeMissingThinking:
 			misses++
 		default:
-			item.Reason = fmt.Sprintf("%s 无有效思考样本", formatProbeTarget(attempt))
+			item.Reason = formatFailedProbeReason(attempt)
 			return item
 		}
 	}
@@ -266,7 +312,8 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 	result := BotRiskProbeAttempt{Identity: identity, Verdict: probeInconclusive.String()}
 	adapter, ok := s.providers.Responses(accountdomain.ProviderBuild)
 	if !ok {
-		return thinkingScan{verdict: probeInconclusive}, 0, nil, result, fmt.Errorf("Provider %s 未注册 Responses 能力", accountdomain.ProviderBuild)
+		result.Detail = fmt.Sprintf("Provider %s 未注册 Responses 能力", accountdomain.ProviderBuild)
+		return thinkingScan{verdict: probeInconclusive}, 0, nil, result, fmt.Errorf("%s", result.Detail)
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, botRiskAttemptTimeout)
 	defer cancel()
@@ -292,7 +339,10 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 		}
 	}
 	if err != nil {
-		return thinkingScan{verdict: probeInconclusive}, providerStatus(err), nil, result, nil
+		status := providerStatus(err)
+		result.Status = status
+		result.Detail = summarizeProbeFailure(status, nil, err)
+		return thinkingScan{verdict: probeInconclusive}, status, nil, result, nil
 	}
 	if response.Body != nil {
 		defer response.Body.Close()
@@ -302,10 +352,16 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 		if len(body) == 0 && response.Diagnostic != nil {
 			body = response.Diagnostic.Body
 		}
+		result.Status = response.StatusCode
+		result.Detail = summarizeProbeFailure(response.StatusCode, body, nil)
 		return thinkingScan{verdict: probeInconclusive}, response.StatusCode, body, result, nil
 	}
 	scan := scanThinkingSSE(response.Body)
+	result.Status = response.StatusCode
 	result.Verdict = scan.verdict.String()
+	if scan.verdict == probeInconclusive {
+		result.Detail = "空流，无思考/正文 delta"
+	}
 	return scan, response.StatusCode, nil, result, nil
 }
 

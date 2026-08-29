@@ -272,6 +272,8 @@ type BotRiskProbeAttempt struct {
 	NodeName string
 	ExitIP   string
 	Verdict  string
+	Status   int
+	Detail   string
 }
 
 // BuildDetectItemResult 是单账号探测的结构化结果，供 SSE 增量推送。

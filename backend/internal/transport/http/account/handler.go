@@ -269,6 +269,8 @@ type accountDetectAttemptDTO struct {
 	NodeName string `json:"nodeName,omitempty"`
 	ExitIP   string `json:"exitIp,omitempty"`
 	Verdict  string `json:"verdict,omitempty"`
+	Status   int    `json:"status,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 func detectAttemptDTOs(values []accountapp.BotRiskProbeAttempt) []accountDetectAttemptDTO {
@@ -279,6 +281,7 @@ func detectAttemptDTOs(values []accountapp.BotRiskProbeAttempt) []accountDetectA
 	for _, value := range values {
 		items = append(items, accountDetectAttemptDTO{
 			Identity: value.Identity, NodeName: value.NodeName, ExitIP: value.ExitIP, Verdict: value.Verdict,
+			Status: value.Status, Detail: value.Detail,
 		})
 	}
 	return items

@@ -336,6 +336,8 @@ export type BuildDetectAttemptDTO = {
   nodeName?: string;
   exitIp?: string;
   verdict?: string;
+  status?: number;
+  detail?: string;
 };
 
 /** 管理端 Grok Build 检测的单账号增量结果（SSE event: item）。 */
@@ -418,6 +420,7 @@ const decodeAccountTaskStreamPayload = createObjectDecoder<AccountTaskStreamPayl
   botFlagSource: isOptional(isNumber),
   attempts: isOptional(isArrayOf(hasShape({
     identity: isOptional(isString), nodeName: isOptional(isString), exitIp: isOptional(isString), verdict: isOptional(isString),
+    status: isOptional(isNumber), detail: isOptional(isString),
   }))),
 });
 
