@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ChevronDown, Network, Pencil, RefreshCw, ShieldCheck, ShieldX, TimerReset } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -251,6 +251,25 @@ function ipStatusLabel(ip: AntiDegradeIPDTO, t: (key: string) => string) {
   return t("antidegrade.idle");
 }
 
+function groupStickyIPs(sticky: AntiDegradeIPDTO[], fallbackTitle: string) {
+  const groups = new Map<string, { key: string; title: string; items: AntiDegradeIPDTO[] }>();
+  for (const ip of sticky) {
+    const key = nodeGroupKey(ip);
+    const current = groups.get(key);
+    if (current) {
+      current.items.push(ip);
+      continue;
+    }
+    groups.set(key, { key, title: nodeGroupTitle(ip, fallbackTitle), items: [ip] });
+  }
+  return [...groups.values()].sort((a, b) => {
+    const aHot = a.items.some((ip) => ip.cooling || isFullIP(ip)) ? 0 : 1;
+    const bHot = b.items.some((ip) => ip.cooling || isFullIP(ip)) ? 0 : 1;
+    if (aHot !== bHot) return aHot - bHot;
+    return a.title.localeCompare(b.title);
+  });
+}
+
 function ipStatusClass(ip: AntiDegradeIPDTO) {
   if (ip.cooling || ip.operatorOverrideUntil) return "text-muted-foreground";
   if (isFullIP(ip)) return "text-destructive";
@@ -268,24 +287,7 @@ function IPLoadPanel({ ips, locale, onClear, clearing }: { ips: AntiDegradeIPDTO
   const visible = ips.filter((ip) => matchesLoadFilter(ip, filter));
   const sticky = visible.filter(isStickyIP);
   const dedicated = visible.filter((ip) => !isStickyIP(ip));
-  const stickyGroups = useMemo(() => {
-    const groups = new Map<string, { key: string; title: string; items: AntiDegradeIPDTO[] }>();
-    for (const ip of sticky) {
-      const key = nodeGroupKey(ip);
-      const current = groups.get(key);
-      if (current) {
-        current.items.push(ip);
-        continue;
-      }
-      groups.set(key, { key, title: nodeGroupTitle(ip, t("antidegrade.nodes")), items: [ip] });
-    }
-    return [...groups.values()].sort((a, b) => {
-      const aHot = a.items.some((ip) => ip.cooling || isFullIP(ip)) ? 0 : 1;
-      const bHot = b.items.some((ip) => ip.cooling || isFullIP(ip)) ? 0 : 1;
-      if (aHot !== bHot) return aHot - bHot;
-      return a.title.localeCompare(b.title);
-    });
-  }, [sticky, t]);
+  const stickyGroups = groupStickyIPs(sticky, t("antidegrade.nodes"));
   const dedicatedSorted = [...dedicated].sort((a, b) => {
     const aHot = a.cooling || isFullIP(a) ? 0 : 1;
     const bHot = b.cooling || isFullIP(b) ? 0 : 1;
