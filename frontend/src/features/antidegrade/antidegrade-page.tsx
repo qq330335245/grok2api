@@ -6,7 +6,6 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 import { ApiError } from "@/shared/api/client";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
