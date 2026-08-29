@@ -114,7 +114,9 @@ func (l *Lease) doRequest(request *http.Request, invalidateForbidden bool) (*htt
 		request.Close = true
 	}
 	response, err := l.do(request)
-	recordPhysicalCall(request.Context(), response, err)
+	if !skipPhysicalCall(request.Context()) {
+		recordPhysicalCall(request.Context(), response, err)
+	}
 	if invalidateForbidden && err == nil && response != nil && response.StatusCode == http.StatusForbidden {
 		l.InvalidateClearance()
 	}
@@ -816,6 +818,12 @@ func (m *Manager) acquire(ctx context.Context, scope domain.Scope, affinity stri
 	managedClearance := isGrokWebScope(scope) && (clearanceMode == "flaresolverr" || clearanceMode == "on_demand")
 	configured := false
 	var available []domain.Node
+	preferSticky := stickyLeasePreferred(ctx)
+	if preferSticky && boundNodeID != 0 {
+		if selected, err := m.repository.GetEgressNode(ctx, boundNodeID); err == nil && !m.isStickyProxyNode(selected) {
+			boundNodeID = 0
+		}
+	}
 	if boundNodeID != 0 {
 		waitedForProbe := false
 		qualityProbe := qualityProbeFromContext(ctx)
@@ -917,8 +925,17 @@ func (m *Manager) acquire(ctx context.Context, scope domain.Scope, affinity stri
 		}
 		available = []domain.Node{{ID: 0, Name: "direct", Scope: scope, Enabled: true, Health: 1}}
 	}
+	if preferSticky {
+		if stickyNodes := m.filterStickyProxyNodes(available); len(stickyNodes) > 0 {
+			available = stickyNodes
+		}
+	}
 	sort.SliceStable(available, func(i, j int) bool { return available[i].ID < available[j].ID })
-	selected := m.selectNode(available, affinity)
+	selectAffinity := affinity
+	if preferSticky {
+		selectAffinity = stickySelectAffinity(affinity)
+	}
+	selected := m.selectNode(available, selectAffinity)
 	return m.leaseForNode(ctx, scope, affinity, encryptedCredentialCookies, managedClearance, selected)
 }
 
@@ -2290,6 +2307,33 @@ func (m *Manager) isStickyProxyNode(value domain.Node) bool {
 	}
 	proxyURL, err := m.cipher.Decrypt(value.EncryptedProxyURL)
 	return err == nil && strings.Contains(proxyURL, application.ProxyAccountPlaceholder)
+}
+
+func (m *Manager) filterStickyProxyNodes(nodes []domain.Node) []domain.Node {
+	filtered := make([]domain.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if node.ID == 0 {
+			continue
+		}
+		if m.isStickyProxyNode(node) {
+			filtered = append(filtered, node)
+		}
+	}
+	return filtered
+}
+
+func stickySelectAffinity(affinity string) string {
+	affinity = strings.TrimSpace(affinity)
+	index := strings.LastIndex(affinity, "+")
+	if index <= 0 || index == len(affinity)-1 {
+		return affinity
+	}
+	for _, char := range affinity[index+1:] {
+		if char < '0' || char > '9' {
+			return affinity
+		}
+	}
+	return affinity[:index]
 }
 
 func (m *Manager) isProxyPoolNode(value domain.Node) bool {

@@ -254,13 +254,34 @@ type accountTaskProgressResponse struct {
 
 // accountDetectItemResponse 是检测任务的单账号增量事件；全量检测仅推送 invalid。
 type accountDetectItemResponse struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Email         string `json:"email,omitempty"`
-	Outcome       string `json:"outcome"`
-	Reason        string `json:"reason,omitempty"`
-	HTTPStatus    int    `json:"httpStatus,omitempty"`
-	BotFlagSource int    `json:"botFlagSource,omitempty"`
+	ID            string                    `json:"id"`
+	Name          string                    `json:"name"`
+	Email         string                    `json:"email,omitempty"`
+	Outcome       string                    `json:"outcome"`
+	Reason        string                    `json:"reason,omitempty"`
+	HTTPStatus    int                       `json:"httpStatus,omitempty"`
+	BotFlagSource int                       `json:"botFlagSource,omitempty"`
+	Attempts      []accountDetectAttemptDTO `json:"attempts,omitempty"`
+}
+
+type accountDetectAttemptDTO struct {
+	Identity string `json:"identity,omitempty"`
+	NodeName string `json:"nodeName,omitempty"`
+	ExitIP   string `json:"exitIp,omitempty"`
+	Verdict  string `json:"verdict,omitempty"`
+}
+
+func detectAttemptDTOs(values []accountapp.BotRiskProbeAttempt) []accountDetectAttemptDTO {
+	if len(values) == 0 {
+		return nil
+	}
+	items := make([]accountDetectAttemptDTO, 0, len(values))
+	for _, value := range values {
+		items = append(items, accountDetectAttemptDTO{
+			Identity: value.Identity, NodeName: value.NodeName, ExitIP: value.ExitIP, Verdict: value.Verdict,
+		})
+	}
+	return items
 }
 
 type accountBatchResponse struct {
@@ -650,6 +671,7 @@ func (h *Handler) detectBuildBotFlags(c *gin.Context) {
 		return stream.Write("item", accountDetectItemResponse{
 			ID: strconv.FormatUint(item.AccountID, 10), Name: item.Name, Email: item.Email,
 			Outcome: string(item.Outcome), Reason: item.Reason, HTTPStatus: item.HTTPStatus, BotFlagSource: item.BotFlagSource,
+			Attempts: detectAttemptDTOs(item.Attempts),
 		})
 	}
 	succeeded, failed, err := h.service.DetectBuildBotFlagsWithProgress(c.Request.Context(), ids, request.All, stream.ProgressObserver(), itemObserver)

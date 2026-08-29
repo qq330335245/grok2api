@@ -266,6 +266,14 @@ const (
 	BuildDetectOutcomeFlagged BuildDetectOutcome = "flagged"
 )
 
+// BotRiskProbeAttempt is one sticky thinking probe, including the live egress.
+type BotRiskProbeAttempt struct {
+	Identity string
+	NodeName string
+	ExitIP   string
+	Verdict  string
+}
+
 // BuildDetectItemResult 是单账号探测的结构化结果，供 SSE 增量推送。
 type BuildDetectItemResult struct {
 	AccountID     uint64
@@ -275,6 +283,7 @@ type BuildDetectItemResult struct {
 	Reason        string
 	HTTPStatus    int
 	BotFlagSource int
+	Attempts      []BotRiskProbeAttempt
 }
 
 // BuildDetectItemObserver 在单个账号探测完成后推送明细；返回错误会取消批次。

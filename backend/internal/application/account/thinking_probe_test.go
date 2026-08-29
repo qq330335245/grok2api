@@ -17,6 +17,16 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 )
 
+func TestFormatProbeTargetIncludesNodeAndExitIP(t *testing.T) {
+	got := formatProbeTarget(BotRiskProbeAttempt{Identity: "acc+1", NodeName: "katabump 008", ExitIP: "51.75.118.171"})
+	if got != "acc+1 katabump 008 51.75.118.171" {
+		t.Fatalf("target=%q", got)
+	}
+	if formatProbeTarget(BotRiskProbeAttempt{Identity: "acc+2"}) != "acc+2" {
+		t.Fatal("identity-only target")
+	}
+}
+
 func TestStickyProbeIdentityUsesPlusSuffix(t *testing.T) {
 	got := stickyProbeIdentity(accountdomain.Credential{ID: 9, Provider: accountdomain.ProviderBuild, EgressIdentity: "sso_abc"}, 1)
 	if got != "sso_abc+1" {
@@ -135,6 +145,12 @@ func TestInspectBuildBotRiskDoesNotNeedSSO(t *testing.T) {
 	if item.Outcome != BuildDetectOutcomeOK || item.BotFlagSource != 0 {
 		t.Fatalf("thinking hit: %#v", item)
 	}
+	if !strings.Contains(item.Reason, "sticky_acc+1") {
+		t.Fatalf("reason=%q", item.Reason)
+	}
+	if len(item.Attempts) != 1 || item.Attempts[0].Identity != "sticky_acc+1" || item.Attempts[0].Verdict != "thinking" {
+		t.Fatalf("attempts=%#v", item.Attempts)
+	}
 	if len(adapter.calls) != 1 || adapter.calls[0] != "sticky_acc+1" {
 		t.Fatalf("calls=%v", adapter.calls)
 	}
@@ -148,6 +164,12 @@ func TestInspectBuildBotRiskDoesNotNeedSSO(t *testing.T) {
 	item = service.inspectBuildBotRisk(ctx, account)
 	if item.Outcome != BuildDetectOutcomeFlagged || item.BotFlagSource != 2 {
 		t.Fatalf("all miss: %#v", item)
+	}
+	if !strings.Contains(item.Reason, "sticky_acc+1") || !strings.Contains(item.Reason, "sticky_acc+2") {
+		t.Fatalf("flagged reason=%q", item.Reason)
+	}
+	if len(item.Attempts) != 2 || item.Attempts[0].Identity != "sticky_acc+1" || item.Attempts[1].Identity != "sticky_acc+2" {
+		t.Fatalf("flagged attempts=%#v", item.Attempts)
 	}
 	if len(adapter.calls) != 2 || adapter.calls[0] != "sticky_acc+1" || adapter.calls[1] != "sticky_acc+2" {
 		t.Fatalf("miss calls=%v", adapter.calls)
@@ -212,8 +234,11 @@ func TestInspectBuildBotRiskQuotaExhausted(t *testing.T) {
 	}
 	service := NewService(repo, nil, nil, nil, provider.NewRegistry(adapter), cipher, nil)
 	item := service.inspectBuildBotRisk(ctx, account)
-	if item.Outcome != BuildDetectOutcomeFailed || item.BotFlagSource != 0 || item.Reason != "额度已满" {
+	if item.Outcome != BuildDetectOutcomeFailed || item.BotFlagSource != 0 || !strings.Contains(item.Reason, "额度已满") {
 		t.Fatalf("quota item=%#v", item)
+	}
+	if len(item.Attempts) != 1 || item.Attempts[0].Identity != "sticky_acc+1" {
+		t.Fatalf("quota attempts=%#v", item.Attempts)
 	}
 	if len(adapter.calls) != 1 {
 		t.Fatalf("quota should stop after first attempt: %v", adapter.calls)

@@ -36,6 +36,7 @@ func (t *egressTransport) RoundTrip(request *http.Request) (*http.Response, erro
 			return nil, err
 		}
 		if !configured {
+			observeDirectExitIP(request.Context(), t.fallback, domainegress.ScopeBuild)
 			idleRequest := t.withStreamIdleContext(request)
 			response, requestErr := t.fallback.RoundTrip(idleRequest)
 			infraegress.RecordDirectPhysicalCall(request.Context(), response, requestErr)
@@ -49,6 +50,7 @@ func (t *egressTransport) RoundTrip(request *http.Request) (*http.Response, erro
 	if lease.UserAgent != "" {
 		request.Header.Set("User-Agent", lease.UserAgent)
 	}
+	observeLeaseExitIP(request.Context(), lease)
 	idleRequest := t.withStreamIdleContext(request)
 	response, err := lease.Do(idleRequest)
 	if err != nil {
@@ -117,6 +119,20 @@ func shouldReportEgressFailure(ctx context.Context, err error) bool {
 		return false
 	}
 	return !errors.Is(err, context.Canceled)
+}
+
+func observeLeaseExitIP(ctx context.Context, lease *infraegress.Lease) {
+	if !infraegress.ExitObservationRequested(ctx) || lease == nil {
+		return
+	}
+	infraegress.RecordSelectionExitIP(ctx, lease.Scope, infraegress.ObserveLeaseExitIP(ctx, lease))
+}
+
+func observeDirectExitIP(ctx context.Context, transport http.RoundTripper, scope domainegress.Scope) {
+	if !infraegress.ExitObservationRequested(ctx) {
+		return
+	}
+	infraegress.RecordSelectionExitIP(ctx, scope, infraegress.ObserveTransportExitIP(ctx, transport))
 }
 
 type egressResponseBody struct {

@@ -530,6 +530,15 @@ function QuarantinePanel({ status, locale, onStatus }: { status: AntiDegradeStat
               <div key={`${item.id}-${item.outcome}-${item.reason ?? ""}`} className="border-b px-3 py-2 last:border-b-0">
                 <p className="text-sm">{item.name || item.id} · {t(`accounts.detectOutcome.${item.outcome}`)}</p>
                 {item.reason ? <p className="mt-0.5 break-all text-[11px] text-muted-foreground">{item.reason}</p> : null}
+                {item.attempts?.length ? (
+                  <div className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
+                    {item.attempts.map((attempt, index) => (
+                      <div key={`${attempt.identity ?? "attempt"}-${index}`} className="break-all">
+                        {[attempt.identity, attempt.nodeName, attempt.exitIp].filter(Boolean).join(" · ") || "—"}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

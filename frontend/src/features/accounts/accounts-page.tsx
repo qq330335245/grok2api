@@ -1674,6 +1674,15 @@ export function AccountsPage() {
                           <div className="truncate font-medium">{item.name || item.id}</div>
                           {item.email ? <div className="truncate text-xs text-muted-foreground">{item.email}</div> : null}
                           {item.reason ? <div className="mt-0.5 break-all text-xs text-muted-foreground">{item.reason}</div> : null}
+                          {item.attempts?.length ? (
+                            <div className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
+                              {item.attempts.map((attempt, index) => (
+                                <div key={`${attempt.identity ?? "attempt"}-${index}`} className="break-all">
+                                  {[attempt.identity, attempt.nodeName, attempt.exitIp].filter(Boolean).join(" · ") || "—"}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
                       </li>
                     ))}

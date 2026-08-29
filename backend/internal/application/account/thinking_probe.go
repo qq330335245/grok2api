@@ -13,6 +13,8 @@ import (
 	"time"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	domainegress "github.com/chenyme/grok2api/backend/internal/domain/egress"
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
@@ -176,6 +178,17 @@ func truncateRunes(value string, max int) string {
 	return string(runes[:max]) + "…"
 }
 
+func formatProbeTarget(attempt BotRiskProbeAttempt) string {
+	parts := []string{strings.TrimSpace(attempt.Identity)}
+	if name := strings.TrimSpace(attempt.NodeName); name != "" {
+		parts = append(parts, name)
+	}
+	if ip := strings.TrimSpace(attempt.ExitIP); ip != "" {
+		parts = append(parts, ip)
+	}
+	return strings.Join(parts, " ")
+}
+
 func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.Credential) BuildDetectItemResult {
 	item := BuildDetectItemResult{AccountID: value.ID, Name: value.Name, Email: value.Email, Outcome: BuildDetectOutcomeFailed}
 	if value.Provider != accountdomain.ProviderBuild {
@@ -188,15 +201,16 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 		return item
 	}
 	misses := 0
-	identities := make([]string, 0, botRiskProbeAttempts)
-	for attempt := 1; attempt <= botRiskProbeAttempts; attempt++ {
+	attempts := make([]BotRiskProbeAttempt, 0, botRiskProbeAttempts)
+	for n := 1; n <= botRiskProbeAttempts; n++ {
 		if ctx.Err() != nil {
+			item.Attempts = attempts
 			item.Reason = ctx.Err().Error()
 			return item
 		}
-		identity := stickyProbeIdentity(value, attempt)
-		identities = append(identities, identity)
-		scan, status, body, probeErr := s.probeThinkingOnStickyIdentity(ctx, value, billing, identity)
+		scan, status, body, attempt, probeErr := s.probeThinkingOnStickyIdentity(ctx, value, billing, n)
+		attempts = append(attempts, attempt)
+		item.Attempts = attempts
 		if status != 0 {
 			item.HTTPStatus = status
 		}
@@ -204,10 +218,14 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 			item.Reason = probeErr.Error()
 			return item
 		}
-		if quotaItem, ok := s.finishBotRiskQuotaRejection(ctx, value, billing, identity, status, body); ok {
+		if quotaItem, ok := s.finishBotRiskQuotaRejection(ctx, value, billing, attempt.Identity, status, body); ok {
+			quotaItem.Attempts = attempts
+			if target := formatProbeTarget(attempt); target != "" {
+				quotaItem.Reason = quotaItem.Reason + " · " + target
+			}
 			return quotaItem
 		}
-		s.logger.Info("bot_risk_probe_attempt", "account_id", value.ID, "identity", identity, "status", status, "verdict", scan.verdict.String(), "event", scan.event, "delta", scan.delta)
+		s.logger.Info("bot_risk_probe_attempt", "account_id", value.ID, "identity", attempt.Identity, "node", attempt.NodeName, "exit_ip", attempt.ExitIP, "status", status, "verdict", scan.verdict.String(), "event", scan.event, "delta", scan.delta)
 		switch scan.verdict {
 		case probeThinking:
 			if persistErr := s.persistPageBotFlag(ctx, value, 0); persistErr != nil {
@@ -216,12 +234,12 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 			}
 			item.BotFlagSource = 0
 			item.Outcome = BuildDetectOutcomeOK
-			item.Reason = fmt.Sprintf("thinking on %s (%s)", identity, scan.event)
+			item.Reason = fmt.Sprintf("thinking on %s (%s)", formatProbeTarget(attempt), scan.event)
 			return item
 		case probeMissingThinking:
 			misses++
 		default:
-			item.Reason = fmt.Sprintf("%s 无有效思考样本", identity)
+			item.Reason = fmt.Sprintf("%s 无有效思考样本", formatProbeTarget(attempt))
 			return item
 		}
 	}
@@ -235,17 +253,24 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 	}
 	item.BotFlagSource = 2
 	item.Outcome = BuildDetectOutcomeFlagged
-	item.Reason = fmt.Sprintf("no thinking on %s", strings.Join(identities, ","))
+	targets := make([]string, 0, len(attempts))
+	for _, attempt := range attempts {
+		targets = append(targets, formatProbeTarget(attempt))
+	}
+	item.Reason = fmt.Sprintf("no thinking on %s", strings.Join(targets, ", "))
 	return item
 }
 
-func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accountdomain.Credential, billing *accountdomain.Billing, identity string) (thinkingScan, int, []byte, error) {
+func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accountdomain.Credential, billing *accountdomain.Billing, attempt int) (thinkingScan, int, []byte, BotRiskProbeAttempt, error) {
+	identity := stickyProbeIdentity(value, attempt)
+	result := BotRiskProbeAttempt{Identity: identity, Verdict: probeInconclusive.String()}
 	adapter, ok := s.providers.Responses(accountdomain.ProviderBuild)
 	if !ok {
-		return thinkingScan{verdict: probeInconclusive}, 0, nil, fmt.Errorf("Provider %s 未注册 Responses 能力", accountdomain.ProviderBuild)
+		return thinkingScan{verdict: probeInconclusive}, 0, nil, result, fmt.Errorf("Provider %s 未注册 Responses 能力", accountdomain.ProviderBuild)
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, botRiskAttemptTimeout)
 	defer cancel()
+	attemptCtx, trace := infraegress.WithTrace(infraegress.WithExitObservation(infraegress.WithStickyLeasePreference(attemptCtx)))
 	probe := value
 	probe.EgressIdentity = identity
 	body := []byte(fmt.Sprintf(`{"model":%q,"input":%q,"stream":true,"reasoning":{"effort":"high"}}`, botRiskProbeModel, botRiskProbePrompt))
@@ -259,8 +284,15 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 		NormalizeBody: true,
 		Streaming:     true,
 	})
+	if sel, ok := trace.Selection(domainegress.ScopeBuild); ok {
+		result.NodeName = strings.TrimSpace(sel.NodeName)
+		result.ExitIP = strings.TrimSpace(sel.ExitIP)
+		if result.NodeName == "" && sel.NodeID == 0 {
+			result.NodeName = "direct"
+		}
+	}
 	if err != nil {
-		return thinkingScan{verdict: probeInconclusive}, providerStatus(err), nil, nil
+		return thinkingScan{verdict: probeInconclusive}, providerStatus(err), nil, result, nil
 	}
 	if response.Body != nil {
 		defer response.Body.Close()
@@ -270,9 +302,11 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 		if len(body) == 0 && response.Diagnostic != nil {
 			body = response.Diagnostic.Body
 		}
-		return thinkingScan{verdict: probeInconclusive}, response.StatusCode, body, nil
+		return thinkingScan{verdict: probeInconclusive}, response.StatusCode, body, result, nil
 	}
-	return scanThinkingSSE(response.Body), response.StatusCode, nil, nil
+	scan := scanThinkingSSE(response.Body)
+	result.Verdict = scan.verdict.String()
+	return scan, response.StatusCode, nil, result, nil
 }
 
 func providerStatus(err error) int {

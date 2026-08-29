@@ -17,6 +17,7 @@ type Selection struct {
 	NodeName string
 	Scope    domain.Scope
 	Proxied  bool
+	ExitIP   string
 }
 
 // Trace retains the most recent actual egress selection per scope. When a request retries egress, audit records the final attempt.
@@ -30,6 +31,9 @@ type traceContextKey struct{}
 type accountContextKey struct{}
 type egressNodeContextKey struct{}
 type qualityProbeContextKey struct{}
+type exitObservationContextKey struct{}
+type skipPhysicalCallContextKey struct{}
+type stickyLeasePreferenceContextKey struct{}
 
 // WithAccount passes a stable Provider account identity to the egress layer. It is used only to render
 // authentication usernames for sticky proxies such as Resin and is never written to upstream headers or audit.
@@ -161,4 +165,73 @@ func recordSelection(ctx context.Context, value Selection) {
 	trace.mu.Lock()
 	trace.selections[value.Scope] = value
 	trace.mu.Unlock()
+}
+
+// WithExitObservation asks Build transport to resolve the live ExitIP on the
+// same lease as the upcoming upstream request. Used by admin bot-risk probes.
+func WithExitObservation(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, exitObservationContextKey{}, true)
+}
+
+// ExitObservationRequested reports whether the caller asked for a live ExitIP.
+func ExitObservationRequested(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	enabled, _ := ctx.Value(exitObservationContextKey{}).(bool)
+	return enabled
+}
+
+// WithStickyLeasePreference prefers {account} sticky nodes when any are available.
+// Bot-risk probes use this so +n identities rotate on the sticky template instead
+// of hashing onto a fixed fission port.
+func WithStickyLeasePreference(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, stickyLeasePreferenceContextKey{}, true)
+}
+
+func stickyLeasePreferred(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	enabled, _ := ctx.Value(stickyLeasePreferenceContextKey{}).(bool)
+	return enabled
+}
+
+func withSkipPhysicalCall(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, skipPhysicalCallContextKey{}, true)
+}
+
+func skipPhysicalCall(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	skip, _ := ctx.Value(skipPhysicalCallContextKey{}).(bool)
+	return skip
+}
+
+// RecordSelectionExitIP attaches a live ExitIP to the current scope selection.
+func RecordSelectionExitIP(ctx context.Context, scope domain.Scope, exitIP string) {
+	exitIP = strings.TrimSpace(exitIP)
+	if exitIP == "" {
+		return
+	}
+	trace := TraceFromContext(ctx)
+	if trace == nil {
+		return
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	selected := trace.selections[scope]
+	selected.Scope = scope
+	selected.ExitIP = exitIP
+	trace.selections[scope] = selected
 }

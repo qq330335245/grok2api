@@ -331,6 +331,13 @@ export function enableWebAccountNSFW(id: string): Promise<{ completed: boolean }
 export type AccountBatchResultDTO = { succeeded: number; failed: number };
 export type AccountTokenRefreshResultDTO = AccountBatchResultDTO & { skipped: number };
 
+export type BuildDetectAttemptDTO = {
+  identity?: string;
+  nodeName?: string;
+  exitIp?: string;
+  verdict?: string;
+};
+
 /** 管理端 Grok Build 检测的单账号增量结果（SSE event: item）。 */
 export type BuildDetectItemDTO = {
   id: string;
@@ -340,6 +347,7 @@ export type BuildDetectItemDTO = {
   reason?: string;
   httpStatus?: number;
   botFlagSource?: number;
+  attempts?: BuildDetectAttemptDTO[];
 };
 
 export type BuildDetectHandlers = {
@@ -408,6 +416,9 @@ const decodeAccountTaskStreamPayload = createObjectDecoder<AccountTaskStreamPayl
   id: isOptional(isString), name: isOptional(isString), email: isOptional(isString),
   outcome: isOptional(isOneOf("ok", "invalid", "failed", "flagged")), reason: isOptional(isString), httpStatus: isOptional(isNumber),
   botFlagSource: isOptional(isNumber),
+  attempts: isOptional(isArrayOf(hasShape({
+    identity: isOptional(isString), nodeName: isOptional(isString), exitIp: isOptional(isString), verdict: isOptional(isString),
+  }))),
 });
 
 function hasNumericResult(value: AccountTaskStreamPayload, fields: string[]): boolean {
@@ -503,6 +514,7 @@ async function runDetectBuildAccountsTask(path: string, body: object, handlers: 
           reason: data.reason,
           httpStatus: data.httpStatus,
           botFlagSource: typeof data.botFlagSource === "number" ? data.botFlagSource : undefined,
+          attempts: Array.isArray(data.attempts) ? data.attempts : undefined,
         });
         return;
       }
