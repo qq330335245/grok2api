@@ -1216,6 +1216,9 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				}
 				record.DurationMS = time.Since(startedAt).Milliseconds()
 				record.ErrorCode = errorCode
+				if !successful && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+					failureAttempts.ensureStreamFailureAttempt(credential, upstreamStartedAt, response, errorCode)
+				}
 				attempts := failureAttempts.snapshot()
 				if !successful && len(attempts) == 0 {
 					statusCode := response.StatusCode
