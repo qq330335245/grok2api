@@ -280,7 +280,11 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 			}
 			item.BotFlagSource = 0
 			item.Outcome = BuildDetectOutcomeOK
-			item.Reason = fmt.Sprintf("thinking on %s (%s)", formatProbeTarget(attempt), scan.event)
+			if scan.event != "" {
+				item.Reason = "thinking (" + scan.event + ")"
+			} else {
+				item.Reason = "thinking"
+			}
 			return item
 		case probeMissingThinking:
 			misses++
@@ -299,11 +303,7 @@ func (s *Service) inspectBuildBotRisk(ctx context.Context, value accountdomain.C
 	}
 	item.BotFlagSource = 2
 	item.Outcome = BuildDetectOutcomeFlagged
-	targets := make([]string, 0, len(attempts))
-	for _, attempt := range attempts {
-		targets = append(targets, formatProbeTarget(attempt))
-	}
-	item.Reason = fmt.Sprintf("no thinking on %s", strings.Join(targets, ", "))
+	item.Reason = fmt.Sprintf("no thinking on %d sticky exits", len(attempts))
 	return item
 }
 
@@ -359,7 +359,10 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 	scan := scanThinkingSSE(response.Body)
 	result.Status = response.StatusCode
 	result.Verdict = scan.verdict.String()
-	if scan.verdict == probeInconclusive {
+	switch scan.verdict {
+	case probeThinking:
+		result.Detail = strings.TrimSpace(scan.event)
+	case probeInconclusive:
 		result.Detail = "空流，无思考/正文 delta"
 	}
 	return scan, response.StatusCode, nil, result, nil

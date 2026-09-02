@@ -187,12 +187,13 @@ type updateRequest struct {
 }
 
 type batchUpdateRequest struct {
-	IDs              []string `json:"ids" binding:"required"`
-	Provider         string   `json:"provider" binding:"required"`
-	Enabled          *bool    `json:"enabled"`
-	Priority         *int     `json:"priority"`
-	MaxConcurrent    *int     `json:"maxConcurrent"`
-	MinimumRemaining *float64 `json:"minimumRemaining"`
+	IDs                  []string `json:"ids" binding:"required"`
+	Provider             string   `json:"provider" binding:"required"`
+	Enabled              *bool    `json:"enabled"`
+	Priority             *int     `json:"priority"`
+	MaxConcurrent        *int     `json:"maxConcurrent"`
+	MinimumRemaining     *float64 `json:"minimumRemaining"`
+	LinkedDisableTargets []string `json:"linkedDisableTargets"`
 }
 
 type batchDeleteRequest struct {
@@ -494,7 +495,12 @@ func (h *Handler) batchUpdate(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
 	}
-	updated, err := h.service.BatchUpdate(c.Request.Context(), accountdomain.Provider(request.Provider), ids, accountapp.UpdateInput{Enabled: request.Enabled, Priority: request.Priority, MaxConcurrent: request.MaxConcurrent, MinimumRemaining: request.MinimumRemaining})
+	linkedTargets, err := parseLinkedDeleteTargets(request.LinkedDisableTargets)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalidLinkedDisableTargets", err.Error())
+		return
+	}
+	updated, err := h.service.BatchUpdate(c.Request.Context(), accountdomain.Provider(request.Provider), ids, accountapp.UpdateInput{Enabled: request.Enabled, Priority: request.Priority, MaxConcurrent: request.MaxConcurrent, MinimumRemaining: request.MinimumRemaining, LinkedProviders: linkedTargets})
 	if err != nil {
 		h.writeServiceError(c, "accountBatchUpdateFailed", err, http.StatusInternalServerError, "批量更新账号失败")
 		return

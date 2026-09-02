@@ -159,7 +159,7 @@ func TestInspectBuildBotRiskDoesNotNeedSSO(t *testing.T) {
 	if item.Outcome != BuildDetectOutcomeOK || item.BotFlagSource != 0 {
 		t.Fatalf("thinking hit: %#v", item)
 	}
-	if !strings.Contains(item.Reason, "sticky_acc+1") {
+	if !strings.Contains(item.Reason, "thinking") {
 		t.Fatalf("reason=%q", item.Reason)
 	}
 	if len(item.Attempts) != 1 || item.Attempts[0].Identity != "sticky_acc+1" || item.Attempts[0].Verdict != "thinking" {
@@ -179,7 +179,7 @@ func TestInspectBuildBotRiskDoesNotNeedSSO(t *testing.T) {
 	if item.Outcome != BuildDetectOutcomeFlagged || item.BotFlagSource != 2 {
 		t.Fatalf("all miss: %#v", item)
 	}
-	if !strings.Contains(item.Reason, "sticky_acc+1") || !strings.Contains(item.Reason, "sticky_acc+2") {
+	if !strings.Contains(item.Reason, "2 sticky exits") {
 		t.Fatalf("flagged reason=%q", item.Reason)
 	}
 	if len(item.Attempts) != 2 || item.Attempts[0].Identity != "sticky_acc+1" || item.Attempts[1].Identity != "sticky_acc+2" {
@@ -321,5 +321,55 @@ func TestInspectBuildBotRiskSurfacesTransportAndHTTPFailures(t *testing.T) {
 	}
 	if !strings.Contains(item.Reason, "HTTP 403") || !strings.Contains(item.Reason, "out of date") {
 		t.Fatalf("http reason=%q", item.Reason)
+	}
+}
+
+func TestInspectBuildBotRiskPropagatesFlagToLinked(t *testing.T) {
+	ctx := context.Background()
+	repo, _ := newLinkedDeleteTestService(t, "bot-risk-linked.db")
+	web, build, console := seedLinkedTrio(t, repo, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "user-linked-flag")
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := cipher.Encrypt("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	build.EncryptedAccessToken = token
+	build.EgressIdentity = "sticky_acc"
+	if _, err := repo.Update(ctx, build); err != nil {
+		t.Fatal(err)
+	}
+	missing := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"
+	adapter := &scriptedThinkingAdapter{sse: []string{missing, missing}}
+	service := NewService(repo, nil, nil, nil, provider.NewRegistry(adapter), cipher, nil)
+	item := service.inspectBuildBotRisk(ctx, build)
+	if item.Outcome != BuildDetectOutcomeFlagged || item.BotFlagSource != 2 {
+		t.Fatalf("flagged item=%#v", item)
+	}
+	for _, peer := range []accountdomain.Credential{web, console} {
+		latest, err := repo.Get(ctx, peer.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if latest.BuildBotFlagSource != 2 || latest.BuildBotFlagOrigin != accountdomain.BuildBotFlagOriginPage {
+			t.Fatalf("peer %s flag=%#v", peer.Provider, latest)
+		}
+	}
+	thinking := "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"ok\"}\n\n"
+	adapter.sse = []string{thinking}
+	item = service.inspectBuildBotRisk(ctx, build)
+	if item.Outcome != BuildDetectOutcomeOK {
+		t.Fatalf("clear item=%#v", item)
+	}
+	for _, peer := range []accountdomain.Credential{web, console, build} {
+		latest, err := repo.Get(ctx, peer.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if latest.BuildBotFlagSource != 0 {
+			t.Fatalf("peer %s still flagged=%#v", peer.Provider, latest)
+		}
 	}
 }

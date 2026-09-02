@@ -291,7 +291,7 @@ func (r *AccountRepository) UpdateBuildBotFlagSources(ctx context.Context, value
 	changed := false
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, value := range values {
-			source := normalizeBuildBotFlagSource(account.ProviderBuild, value.Source)
+			source := normalizeBuildBotFlagSource(account.ProviderBuild, value.Source, "")
 			result := tx.Model(&accountCredentialModel{}).
 				Where("account_id = ? AND encrypted_primary = ? AND build_bot_flag_origin <> ?", value.AccountID, value.ExpectedEncryptedAccessToken, account.BuildBotFlagOriginPage).
 				Update("build_bot_flag_source", source)
@@ -2038,10 +2038,10 @@ func (r *AccountRepository) UpdateTokens(ctx context.Context, id uint64, accessT
 		}
 		updates := map[string]any{
 			"encrypted_primary": accessToken, "expires_at": expiresAt, "refresh_due_at": refreshDueAt,
-			"last_refresh_at":   now, "refresh_failures": 0, "refresh_unclassified_auth_failures": 0, "last_refresh_error_status": 0, "last_refresh_error": "", "last_refresh_error_message": "", "last_refresh_error_response": "", "refresh_permanent": false, "updated_at": now,
+			"last_refresh_at": now, "refresh_failures": 0, "refresh_unclassified_auth_failures": 0, "last_refresh_error_status": 0, "last_refresh_error": "", "last_refresh_error_message": "", "last_refresh_error_response": "", "refresh_permanent": false, "updated_at": now,
 		}
 		if storedCredential.BuildBotFlagOrigin != account.BuildBotFlagOriginPage {
-			updates["build_bot_flag_source"] = normalizeBuildBotFlagSource(account.Provider(providerRow.Provider), buildBotFlagSource)
+			updates["build_bot_flag_source"] = normalizeBuildBotFlagSource(account.Provider(providerRow.Provider), buildBotFlagSource, storedCredential.BuildBotFlagOrigin)
 			updates["build_bot_flag_origin"] = account.BuildBotFlagOriginJWT
 		}
 		if refreshToken != "" {

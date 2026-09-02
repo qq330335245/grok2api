@@ -88,6 +88,7 @@ import {
   type DeviceSessionDTO,
   type QuotaDTO,
 } from "@/features/accounts/accounts-api";
+import { DetectResultList } from "@/features/accounts/detect-result-list";
 import { AccountQuota, ConsoleQuota, WebQuota } from "@/features/accounts/account-quota";
 import { AccountNameCell } from "@/features/accounts/account-name-cell";
 import { WebAccountScriptsDialog } from "@/features/accounts/web-account-scripts";
@@ -145,6 +146,7 @@ export function AccountsPage() {
   const [selection, setSelection] = useState<AccountSelection>(() => ({ provider: "grok_build", ids: new Set() }));
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [batchConcurrencyOpen, setBatchConcurrencyOpen] = useState(false);
+  const [batchDisableOpen, setBatchDisableOpen] = useState(false);
   const [batchMaxConcurrent, setBatchMaxConcurrent] = useState("1");
   const [batchQuotaTaskOpen, setBatchQuotaTaskOpen] = useState(false);
   const [batchQuotaTask, setBatchQuotaTask] = useState<BuildQuotaTask>("sync");
@@ -354,7 +356,7 @@ export function AccountsPage() {
   });
 
   useEffect(() => {
-    if (!deleting && !batchDeleteOpen) return;
+    if (!deleting && !batchDeleteOpen && !batchDisableOpen) return;
     const ids = deleting ? [deleting.id] : (selectedIdsKey ? selectedIdsKey.split(",") : []);
     if (linkedDeleteTargets.length === 0 || ids.length === 0) return;
     let cancelled = false;
@@ -385,7 +387,7 @@ export function AccountsPage() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [batchDeleteOpen, deleting, linkedDeleteTargets, provider, selectedIdsKey, t]);
+  }, [batchDeleteOpen, batchDisableOpen, deleting, linkedDeleteTargets, provider, selectedIdsKey, t]);
 
 
   const linkedTargetOptions = (current: AccountProvider): AccountProvider[] =>
@@ -728,8 +730,11 @@ export function AccountsPage() {
   });
 
   const batchUpdateMutation = useMutation({
-    mutationFn: (enabled: boolean) => updateAccountsEnabled([...selected], enabled, provider),
+    mutationFn: (input: { enabled: boolean; linkedTargets?: AccountProvider[] }) =>
+      updateAccountsEnabled([...selected], input.enabled, provider, input.linkedTargets),
     onSuccess: () => {
+      setBatchDisableOpen(false);
+      resetLinkedDeleteState();
       clearSelection();
       invalidateAccountData();
       toast.success(t("accounts.batchUpdated"));
@@ -1398,10 +1403,10 @@ export function AccountsPage() {
                   { value: "refreshable", label: t("accountCredential.autoRefresh") },
                   { value: "unrefreshable", label: t("accountCredential.noAutoRefresh") },
                 ] }] : []),
-                ...(provider === "grok_build" ? [{ id: "risk", label: t("accounts.riskFilter"), value: riskFilter, onChange: (value: string) => { setRiskFilter(value); setPage(1); }, options: [
+                { id: "risk", label: t("accounts.riskFilter"), value: riskFilter, onChange: (value: string) => { setRiskFilter(value); setPage(1); }, options: [
                   { value: "flagged", label: t("accounts.botRisk") },
                   { value: "normal", label: t("accounts.riskNormal") },
-                ] }] : []),
+                ] },
                 ...(provider === "grok_web" ? [{ id: "agreement", label: t("accounts.agreementFilter"), value: agreementFilter, onChange: (value: string) => { setAgreementFilter(value); setPage(1); }, options: [
                   { value: "nsfwEnabled", label: t("accounts.agreementNsfwEnabled") },
                   { value: "nsfwDisabled", label: t("accounts.agreementNsfwDisabled") },
@@ -1427,8 +1432,8 @@ export function AccountsPage() {
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="mr-1 text-xs text-muted-foreground">{t("common.selectedCount", { count: selected.size })}</span>
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={openSelectedExport}><Download />{t("accounts.exportAuth")}</Button>
-                <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => batchUpdateMutation.mutate(true)}>{t("common.enable")}</Button>
-                <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => batchUpdateMutation.mutate(false)}>{t("common.disable")}</Button>
+                <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => batchUpdateMutation.mutate({ enabled: true })}>{t("common.enable")}</Button>
+                <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => { resetLinkedDeleteState(); setBatchDisableOpen(true); }}>{t("common.disable")}</Button>
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => {
                   setBatchMaxConcurrent("1");
                   setBatchConcurrencyOpen(true);
@@ -1647,47 +1652,14 @@ export function AccountsPage() {
               {(detectCounts.ok + detectCounts.invalid + detectCounts.failed) > detectVisibleItems.length ? (
                 <p className="text-xs text-muted-foreground">{t("accounts.detectResultsLimited", { count: 200 })}</p>
               ) : null}
-              <div className="max-h-64 overflow-y-auto rounded-md border">
-                {detectVisibleItems.length === 0 ? (
-                  <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                    {detectMutation.isPending
-                      ? t(detectMode === "all" ? "accounts.detectWaitingInvalid" : "accounts.detectWaitingResults")
-                      : t(detectMode === "all" ? "accounts.detectNoInvalid" : "accounts.detectNoResults")}
-                  </div>
-                ) : (
-                  <ul className="divide-y">
-                    {detectVisibleItems.map((item) => (
-                      <li key={`${item.id}-${item.outcome}-${item.reason ?? ""}`} className="flex items-start gap-3 px-3 py-2 text-sm">
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            "mt-0.5 shrink-0",
-                            item.outcome === "ok" && "border-emerald-500/40 text-emerald-700 dark:text-emerald-300",
-                            item.outcome === "invalid" && "border-destructive/40 text-destructive",
-                            item.outcome === "flagged" && "border-destructive/40 text-destructive",
-                            item.outcome === "failed" && "border-amber-500/40 text-amber-700 dark:text-amber-300",
-                          )}
-                        >
-                          {t(`accounts.detectOutcome.${item.outcome}`)}
-                        </Badge>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-medium">{item.name || item.id}</div>
-                          {item.email ? <div className="truncate text-xs text-muted-foreground">{item.email}</div> : null}
-                          {item.reason ? <div className="mt-0.5 break-all text-xs text-muted-foreground">{item.reason}</div> : null}
-                          {item.attempts?.length ? (
-                            <div className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
-                              {item.attempts.map((attempt, index) => (
-                                <div key={`${attempt.identity ?? "attempt"}-${index}`} className="break-all">
-                                  {[attempt.identity, attempt.nodeName, attempt.exitIp, attempt.status ? `HTTP ${attempt.status}` : "", attempt.detail].filter(Boolean).join(" · ") || "—"}
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+              <div className="max-h-72 overflow-y-auto rounded-md border">
+                <DetectResultList
+                  kind={detectKind === "botflag" ? "botflag" : "liveness"}
+                  items={detectVisibleItems}
+                  empty={detectMutation.isPending
+                    ? t(detectMode === "all" ? "accounts.detectWaitingInvalid" : "accounts.detectWaitingResults")
+                    : t(detectMode === "all" ? "accounts.detectNoInvalid" : "accounts.detectNoResults")}
+                />
               </div>
             </div>
           ) : null}
@@ -2075,6 +2047,68 @@ export function AccountsPage() {
               if (linkedPreviewBlocking) return;
               batchDeleteMutation.mutate({ ids: [...selected], provider, linkedDeleteTargets: [...linkedDeleteTargets] });
             }}>{t("accounts.deleteConfirm")}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={batchDisableOpen} onOpenChange={(open) => {
+        if (!open) {
+          if (batchUpdateMutation.isPending) return;
+          setBatchDisableOpen(false);
+          resetLinkedDeleteState();
+        }
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("accounts.batchDisableTitle", { count: selected.size })}</AlertDialogTitle>
+            <AlertDialogDescription>{t("accounts.batchDisableDescription")}</AlertDialogDescription>
+          </AlertDialogHeader>
+            <div className="space-y-3 border-t pt-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">{t("accounts.linkedDisableTitle")}</p>
+                <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={selectAllLinkedTargets}>
+                  {linkedTargetOptions(provider).every((item) => linkedDeleteTargets.includes(item)) ? t("accounts.linkedDeleteClearAll") : t("accounts.linkedDeleteSelectAll")}
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                {linkedTargetOptions(provider).map((target) => {
+                  const checked = linkedDeleteTargets.includes(target);
+                  const TargetIcon = linkedTargetIcon(target);
+                  const pending = linkedCountPending(target, checked);
+                  const failed = linkedCountFailed(target, checked);
+                  return (
+                    <label key={target} className="flex min-h-6 items-center gap-2 text-sm">
+                      <Checkbox checked={checked} onCheckedChange={(value) => toggleLinkedDeleteTarget(target, value === true)} />
+                      <TargetIcon className={cn("size-3.5 shrink-0", linkedTargetIconClass(target))} aria-hidden />
+                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                        <span>{linkedTargetLabel(target)}</span>
+                        <span
+                          className={cn(
+                            "inline-flex h-4 min-w-[2.75rem] items-center justify-start tabular-nums text-xs",
+                            failed ? "text-destructive" : "text-muted-foreground",
+                            !checked && "invisible",
+                          )}
+                          aria-hidden={!checked}
+                          aria-busy={pending}
+                        >
+                          {pending ? <Spinner className="size-3.5" /> : linkedExtraLabel(target, checked)}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="min-h-4 text-xs text-muted-foreground">
+                {linkedDeletePreviewError ? t("accounts.linkedDeletePreviewFailed") : t("accounts.linkedDisableHint")}
+              </p>
+            </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={batchUpdateMutation.isPending || selected.size === 0 || linkedPreviewBlocking} onClick={(event) => {
+              event.preventDefault();
+              if (linkedPreviewBlocking) return;
+              batchUpdateMutation.mutate({ enabled: false, linkedTargets: [...linkedDeleteTargets] });
+            }}>{t("common.disable")}</AlertDialogAction>
+          </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 

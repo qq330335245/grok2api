@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { detectBuildBotFlags, updateAccountsEnabled, type BuildDetectItemDTO } from "@/features/accounts/accounts-api";
+import { DetectResultList } from "@/features/accounts/detect-result-list";
 import { clearAntiDegradeAccount, clearAntiDegradeIP, getAntiDegradeStatus, updateAntiDegradeConfig, type AntiDegradeConfigDTO, type AntiDegradeIPDTO, type AntiDegradeQuarantineDTO, type AntiDegradeStatusDTO } from "@/features/antidegrade/antidegrade-api";
 import { ErrorState, LoadingState } from "@/shared/components/data-state";
 import { PageHeader } from "@/shared/components/page-header";
@@ -518,29 +519,16 @@ function QuarantinePanel({ status, locale, onStatus }: { status: AntiDegradeStat
         </Table>
       )}
       <Dialog open={detectOpen} onOpenChange={setDetectOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{t("antidegrade.detectBotFlag")}</DialogTitle>
             <DialogDescription>{t("accounts.detectBotFlagSelectedDescription", { count: selectedIds.length || detectItems.length || 1 })}</DialogDescription>
           </DialogHeader>
-          <div className="max-h-64 overflow-y-auto rounded-md border">
-            {detectItems.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground">{detectMany.isPending ? t("accounts.detectWaitingResults") : t("accounts.detectNoResults")}</p>
-            ) : detectItems.map((item) => (
-              <div key={`${item.id}-${item.outcome}-${item.reason ?? ""}`} className="border-b px-3 py-2 last:border-b-0">
-                <p className="text-sm">{item.name || item.id} · {t(`accounts.detectOutcome.${item.outcome}`)}</p>
-                {item.reason ? <p className="mt-0.5 break-all text-[11px] text-muted-foreground">{item.reason}</p> : null}
-                {item.attempts?.length ? (
-                  <div className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
-                    {item.attempts.map((attempt, index) => (
-                      <div key={`${attempt.identity ?? "attempt"}-${index}`} className="break-all">
-                        {[attempt.identity, attempt.nodeName, attempt.exitIp, attempt.status ? `HTTP ${attempt.status}` : "", attempt.detail].filter(Boolean).join(" · ") || "—"}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ))}
+          <div className="max-h-72 overflow-y-auto rounded-md border">
+            <DetectResultList
+              items={detectItems}
+              empty={detectMany.isPending ? t("accounts.detectWaitingResults") : t("accounts.detectNoResults")}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDetectOpen(false)}>{t("common.close")}</Button>

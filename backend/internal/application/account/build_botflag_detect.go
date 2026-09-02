@@ -113,6 +113,37 @@ func (s *Service) persistPageBotFlag(ctx context.Context, value accountdomain.Cr
 	if _, err := s.accounts.Update(ctx, latest); err != nil {
 		return err
 	}
+	if err := s.propagatePageBotFlagToLinked(ctx, latest, source); err != nil {
+		return err
+	}
 	s.invalidateBuildBotFlagCache()
+	return nil
+}
+
+func (s *Service) propagatePageBotFlagToLinked(ctx context.Context, value accountdomain.Credential, source int) error {
+	if s.accounts == nil || !value.Provider.IsValid() {
+		return nil
+	}
+	targets := make([]accountdomain.Provider, 0, 2)
+	for _, provider := range accountdomain.Providers() {
+		if provider != value.Provider {
+			targets = append(targets, provider)
+		}
+	}
+	resolution, err := s.accounts.ResolveLinkedDeleteIDs(ctx, value.Provider, []uint64{value.ID}, targets)
+	if err != nil {
+		return err
+	}
+	for id := range resolution.PeerProviders {
+		peer, getErr := s.accounts.Get(ctx, id)
+		if getErr != nil {
+			return getErr
+		}
+		peer.BuildBotFlagSource = source
+		peer.BuildBotFlagOrigin = accountdomain.BuildBotFlagOriginPage
+		if _, updateErr := s.accounts.Update(ctx, peer); updateErr != nil {
+			return updateErr
+		}
+	}
 	return nil
 }

@@ -77,3 +77,28 @@ func TestBatchUpdateRetainsBoundedRequestSize(t *testing.T) {
 		t.Fatal("oversized update reached repository")
 	}
 }
+
+func TestBatchUpdateDisablesLinkedAccounts(t *testing.T) {
+	repo, service := newLinkedDeleteTestService(t, "batch-disable-linked.db")
+	web, build, console := seedLinkedTrio(t, repo, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "user-disable-linked")
+	enabled := false
+	updated, err := service.BatchUpdate(context.Background(), accountdomain.ProviderBuild, []uint64{build.ID}, UpdateInput{
+		Enabled:         &enabled,
+		LinkedProviders: []accountdomain.Provider{accountdomain.ProviderWeb, accountdomain.ProviderConsole},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 3 {
+		t.Fatalf("updated=%d", updated)
+	}
+	for _, id := range []uint64{web.ID, build.ID, console.ID} {
+		latest, getErr := repo.Get(context.Background(), id)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if latest.Enabled {
+			t.Fatalf("%s still enabled", latest.Provider)
+		}
+	}
+}

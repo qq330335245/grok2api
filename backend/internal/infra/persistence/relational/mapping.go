@@ -172,10 +172,10 @@ func fromAccountCredentialDomain(value account.Credential) accountCredentialMode
 		AccountID: value.ID, AuthType: string(authType), ClientID: value.OIDCClientID,
 		EncryptedPrimary: value.EncryptedAccessToken, EncryptedRefresh: value.EncryptedRefreshToken,
 		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie, EncryptedSSO: value.EncryptedSSOToken,
-		ExpiresAt:                 expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: value.LastRefreshAt,
+		ExpiresAt: expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: value.LastRefreshAt,
 		RefreshFailures: value.RefreshFailureCount, RefreshUnclassifiedAuthFailures: value.RefreshUnclassifiedAuthCount, LastRefreshErrorStatus: value.LastRefreshErrorStatus, LastRefreshError: value.LastRefreshErrorCode, LastRefreshErrorMessage: value.LastRefreshErrorMessage, LastRefreshErrorResponse: value.LastRefreshErrorResponse, RefreshPermanent: value.RefreshPermanent,
-		BuildBotFlagSource: normalizeBuildBotFlagSource(value.Provider, value.BuildBotFlagSource),
 		BuildBotFlagOrigin: normalizeBuildBotFlagOrigin(value.Provider, value.BuildBotFlagOrigin),
+		BuildBotFlagSource: normalizeBuildBotFlagSource(value.Provider, value.BuildBotFlagSource, normalizeBuildBotFlagOrigin(value.Provider, value.BuildBotFlagOrigin)),
 		UpdatedAt:          time.Now().UTC(),
 	}
 }
@@ -184,11 +184,17 @@ func normalizedBuildBotFlagSource(provider account.Provider, credential *account
 	if credential == nil {
 		return 0
 	}
-	return normalizeBuildBotFlagSource(provider, credential.BuildBotFlagSource)
+	return normalizeBuildBotFlagSource(provider, credential.BuildBotFlagSource, credential.BuildBotFlagOrigin)
 }
 
-func normalizeBuildBotFlagSource(provider account.Provider, source int) int {
-	if provider == account.ProviderBuild && (source == 1 || source == 2) {
+func normalizeBuildBotFlagSource(provider account.Provider, source int, origin string) int {
+	if source != 1 && source != 2 {
+		return 0
+	}
+	if provider == account.ProviderBuild {
+		return source
+	}
+	if origin == account.BuildBotFlagOriginPage {
 		return source
 	}
 	return 0
@@ -202,12 +208,14 @@ func credentialOrigin(credential *accountCredentialModel) string {
 }
 
 func normalizeBuildBotFlagOrigin(provider account.Provider, origin string) string {
-	if provider != account.ProviderBuild {
-		return ""
-	}
 	switch origin {
-	case account.BuildBotFlagOriginJWT, account.BuildBotFlagOriginPage:
+	case account.BuildBotFlagOriginPage:
 		return origin
+	case account.BuildBotFlagOriginJWT:
+		if provider == account.ProviderBuild {
+			return origin
+		}
+		return ""
 	default:
 		return ""
 	}

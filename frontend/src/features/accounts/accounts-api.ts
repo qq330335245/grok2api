@@ -630,8 +630,11 @@ export function exportSelectedAccounts(provider: AccountProvider, ids: string[])
   return apiDownload("/api/admin/v1/accounts/export", { method: "POST", body: { provider, ids } });
 }
 
-export function updateAccountsEnabled(ids: string[], enabled: boolean, provider: AccountProvider): Promise<{ updated: number }> {
-  return apiRequest("/api/admin/v1/accounts/batch", { method: "PATCH", body: { ids, enabled, provider } }, decodeCountResult<{ updated: number }>("updated"));
+export function updateAccountsEnabled(ids: string[], enabled: boolean, provider: AccountProvider, linkedDisableTargets: AccountProvider[] = []): Promise<{ updated: number }> {
+  return apiRequest("/api/admin/v1/accounts/batch", { method: "PATCH", body: {
+    ids, enabled, provider,
+    ...(linkedDisableTargets.length ? { linkedDisableTargets } : {}),
+  } }, decodeCountResult<{ updated: number }>("updated"));
 }
 
 export function updateAccountsMaxConcurrent(ids: string[], maxConcurrent: number, provider: AccountProvider): Promise<{ updated: number }> {

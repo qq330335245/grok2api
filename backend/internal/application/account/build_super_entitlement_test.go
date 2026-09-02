@@ -169,8 +169,9 @@ func TestAccountViewsIncludeBuildBotFlagMetadata(t *testing.T) {
 	if err != nil || total != 1 || len(views) != 1 || views[0].Credential.ID != normal.ID {
 		t.Fatalf("normal views=%#v total=%d err=%v", views, total, err)
 	}
-	if _, _, err := service.List(ctx, 1, 20, "", ListFilter{Provider: string(accountdomain.ProviderWeb), Risk: "flagged"}); !errors.Is(err, ErrInvalidFilter) {
-		t.Fatalf("non-Build risk filter err = %v", err)
+	webViews, webTotal, err := service.List(ctx, 1, 20, "", ListFilter{Provider: string(accountdomain.ProviderWeb), Risk: "flagged"})
+	if err != nil || webTotal != 0 || len(webViews) != 0 {
+		t.Fatalf("web flagged views=%#v total=%d err=%v", webViews, webTotal, err)
 	}
 	summary, err := service.Summary(ctx)
 	if err != nil || summary.Risk != 1 {

@@ -215,6 +215,9 @@ type UpdateInput struct {
 	BuildSuperEntitled *bool
 	// BuildRouteMode 仅 grok_build 可设置；nil 表示不修改。
 	BuildRouteMode *accountdomain.BuildRouteMode
+	// LinkedProviders, when Enabled is set, also applies the enable/disable
+	// change to linked accounts in those other pools (same expansion as delete).
+	LinkedProviders []accountdomain.Provider
 }
 
 type CleanupStatus string
@@ -584,7 +587,6 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 		!egressValid ||
 		!oneOf(filter.Renewal, "", "refreshable", "unrefreshable") ||
 		!oneOf(filter.Risk, "", "flagged", "normal") ||
-		(filter.Risk != "" && filter.Provider != string(accountdomain.ProviderBuild)) ||
 		!oneOf(filter.Agreement, "", "nsfwEnabled", "nsfwDisabled", "termsAccepted", "termsNotAccepted", "allAccepted", "allNotAccepted") ||
 		(filter.Agreement != "" && filter.Provider != string(accountdomain.ProviderWeb)) ||
 		!validAssociationFilter(filter.Provider, filter.Association) ||
@@ -842,15 +844,37 @@ func (s *Service) BatchUpdate(ctx context.Context, providerValue accountdomain.P
 	if input.Name != nil {
 		return 0, invalidInput("批量更新不支持修改账号名称")
 	}
-	updated, err := s.accounts.UpdateMany(ctx, providerValue, ids, repository.AccountUpdates{Enabled: input.Enabled, Priority: input.Priority, MaxConcurrent: input.MaxConcurrent, MinimumRemaining: input.MinimumRemaining})
-	if err != nil {
-		return 0, mapRepositoryError(err)
+	updates := repository.AccountUpdates{Enabled: input.Enabled, Priority: input.Priority, MaxConcurrent: input.MaxConcurrent, MinimumRemaining: input.MinimumRemaining}
+	groups := map[accountdomain.Provider][]uint64{providerValue: append([]uint64(nil), ids...)}
+	stickyIDs := append([]uint64(nil), ids...)
+	if input.Enabled != nil && len(input.LinkedProviders) > 0 {
+		resolution, resolveErr := s.accounts.ResolveLinkedDeleteIDs(ctx, providerValue, ids, input.LinkedProviders)
+		if resolveErr != nil {
+			return 0, mapLinkedDeleteError(resolveErr)
+		}
+		for id, peerProvider := range resolution.PeerProviders {
+			groups[peerProvider] = append(groups[peerProvider], id)
+			stickyIDs = append(stickyIDs, id)
+		}
+	}
+	var updated int64
+	for provider, groupIDs := range groups {
+		if len(groupIDs) == 0 {
+			continue
+		}
+		slices.Sort(groupIDs)
+		groupIDs = slices.Compact(groupIDs)
+		count, err := s.accounts.UpdateMany(ctx, provider, groupIDs, updates)
+		if err != nil {
+			return updated, mapRepositoryError(err)
+		}
+		updated += count
 	}
 	if input.Enabled != nil && !*input.Enabled && s.sticky != nil {
 		if batchDeleter, ok := s.sticky.(repository.StickySessionBatchDeleter); ok {
-			_ = batchDeleter.DeleteByAccounts(ctx, ids)
+			_ = batchDeleter.DeleteByAccounts(ctx, stickyIDs)
 		} else {
-			for _, id := range ids {
+			for _, id := range stickyIDs {
 				_ = s.sticky.DeleteByAccount(ctx, id)
 			}
 		}
