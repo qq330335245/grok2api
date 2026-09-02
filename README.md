@@ -295,7 +295,7 @@ Web can be weakly linked one-to-one with matching Build and Console accounts. Li
 
 ### Codex, Claude Code, and prompt caching
 
-Responses and Messages support streaming, tools, reasoning, multi-turn sessions, and compaction. Stable client session signals are preserved for Grok Build prompt-cache affinity. Cache hits still require a compatible upstream account and an unchanged prompt prefix. A still-decryptable `g2a_compact_v1` summary from this gateway instance is expanded even if the session or PromptCacheKey remaps. Other compaction blobs are forwarded as original upstream state; if Build rejects them, that error is returned to the client.
+Responses and Messages support streaming, tools, reasoning, multi-turn sessions, and compaction. Stable client session signals are preserved for Grok Build prompt-cache affinity. Cache hits still require a compatible upstream account and an unchanged prompt prefix. A still-decryptable `g2a_compact_v1` summary from this gateway instance is expanded even if the session or PromptCacheKey remaps. Other compaction blobs are replaced with a portable boundary message so Claude Code / Codex turns do not 400 on foreign compact state. If a leaked original blob still reaches Build and is rejected, the same account retries without the blob.
 
 Responses and Chat Completions report OpenAI-style total input. Messages reports Anthropic-style uncached input and cache reads separately. Audits retain total and cached input for billing reconciliation.
 

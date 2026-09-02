@@ -244,6 +244,9 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 			if err == nil && conversationOptions.ReasoningEffortSet && request.NormalizedMetadata != nil {
 				request.NormalizedMetadata.ReasoningEffort = conversationOptions.ReasoningEffort
 			}
+			if err == nil {
+				body, _, _, err = expandGatewayCompactionHistory(body, a.compaction, request.PromptCacheKey)
+			}
 		} else {
 			var foreignCompactions, driftedCompactions int
 			body, foreignCompactions, driftedCompactions, err = expandGatewayCompactionHistory(body, a.compaction, request.PromptCacheKey)

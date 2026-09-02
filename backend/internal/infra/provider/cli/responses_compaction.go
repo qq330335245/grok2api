@@ -87,10 +87,12 @@ func (c *gatewayCompactionCodec) decode(session, blob string) (summary string, o
 }
 
 // expandGatewayCompactionHistory restores gateway-owned remote-v2 state to a
-// portable developer message. Client compaction blobs without the gateway
-// prefix are treated as upstream original compact state and forwarded as-is.
-// A still-decryptable g2a_compact_v1 blob is expanded locally. If Build
-// rejects an original blob, that error is returned to the client.
+// portable developer message. A still-decryptable g2a_compact_v1 blob is
+// expanded locally. Client compaction blobs without that prefix cannot be
+// decoded by this gateway's Build accounts (Claude Code / Codex / other
+// instances), so they are replaced with a boundary message instead of being
+// forwarded. A leaked original blob that still reaches Build is recovered on
+// the compact-decode 400 path.
 func expandGatewayCompactionHistory(body []byte, codec *gatewayCompactionCodec, session string) ([]byte, int, int, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -117,6 +119,9 @@ func expandGatewayCompactionHistory(body []byte, codec *gatewayCompactionCodec, 
 			continue
 		}
 		if !owned {
+			foreign++
+			items[index] = foreignCompactionBoundaryMessage()
+			changed = true
 			continue
 		}
 		items[index] = gatewayCompactionSummaryMessage(summary)
@@ -243,6 +248,40 @@ func isDegenerateGatewayCompactionSummary(summary string) bool {
 
 func gatewayCompactionContinuation(raw string) string {
 	return "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n" + cleanGatewayCompactionSummary(raw)
+}
+
+
+func foreignCompactionBoundaryMessage() map[string]any {
+	return compatibilityBoundaryMessage("A compacted context created by another provider cannot be decoded by Grok Build. Continue from the retained conversation messages.")
+}
+
+func replaceCompactionItemsWithBoundary(body []byte) ([]byte, bool) {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return body, false
+	}
+	items, ok := payload["input"].([]any)
+	if !ok || len(items) == 0 {
+		return body, false
+	}
+	changed := false
+	for index, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok || stringField(item, "type") != "compaction" {
+			continue
+		}
+		items[index] = compatibilityBoundaryMessage("A prior compacted context could not be decoded by the upstream model. Continue from the retained conversation messages.")
+		changed = true
+	}
+	if !changed {
+		return body, false
+	}
+	payload["input"] = items
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return body, false
+	}
+	return encoded, true
 }
 
 // Grok Build rebuilds full-replace history with a synthetic user_meta item.

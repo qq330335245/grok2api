@@ -278,7 +278,7 @@ func TestPrepareGatewayCompactionSampleOmitsToolChoiceWithoutTools(t *testing.T)
 	}
 }
 
-func TestUpstreamCompactionBlobIsForwarded(t *testing.T) {
+func TestUpstreamCompactionBlobIsReplacedWithBoundary(t *testing.T) {
 	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	if err != nil {
 		t.Fatal(err)
@@ -288,12 +288,12 @@ func TestUpstreamCompactionBlobIsForwarded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if foreign != 0 || drifted != 0 || !strings.Contains(string(expanded), blob) || !strings.Contains(string(expanded), `"type":"compaction"`) {
+	if foreign != 1 || drifted != 0 || strings.Contains(string(expanded), blob) || strings.Contains(string(expanded), `"type":"compaction"`) || !strings.Contains(string(expanded), "cannot be decoded by Grok Build") {
 		t.Fatalf("expanded = %s, foreign = %d, drifted = %d", expanded, foreign, drifted)
 	}
 }
 
-func TestForwardResponseKeepsUpstreamCompactionBlob(t *testing.T) {
+func TestForwardResponseOmitsForeignCompactionBlob(t *testing.T) {
 	adapter, encrypted := newCompactionTestAdapter(t)
 	blob := "opaque-upstream-compact-blob"
 	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -301,8 +301,8 @@ func TestForwardResponseKeepsUpstreamCompactionBlob(t *testing.T) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if !strings.Contains(string(data), blob) || !strings.Contains(string(data), `"type":"compaction"`) || strings.Contains(string(data), "could not be decoded") {
-			t.Fatalf("upstream compact blob was rewritten: %s", data)
+		if strings.Contains(string(data), blob) || strings.Contains(string(data), `"type":"compaction"`) || !strings.Contains(string(data), "cannot be decoded by Grok Build") {
+			t.Fatalf("foreign compact blob reached Build: %s", data)
 		}
 		return jsonHTTPResponse(request, http.StatusOK, `{"id":"resp_ok","status":"completed","output":[]}`), nil
 	})
@@ -316,7 +316,7 @@ func TestForwardResponseKeepsUpstreamCompactionBlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK || strings.Contains(response.Header.Get("X-Grok2API-Compatibility-Warnings"), "foreign_compaction_omitted") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(response.Header.Get("X-Grok2API-Compatibility-Warnings"), "foreign_compaction_omitted") {
 		t.Fatalf("status=%d warnings=%q", response.StatusCode, response.Header.Get("X-Grok2API-Compatibility-Warnings"))
 	}
 }

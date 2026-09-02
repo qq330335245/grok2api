@@ -22,6 +22,7 @@ var compactionBlobDecodeFailureMarkers = [][]byte{
 
 type reasoningRecoveryOutcome struct {
 	encryptedContentDowngraded bool
+	compactionBlobStripped     bool
 	sessionReset               bool
 	failed                     bool
 	attempts                   []provider.RecoveredAttempt
@@ -32,6 +33,7 @@ func (o reasoningRecoveryOutcome) merge(other reasoningRecoveryOutcome) reasonin
 	attempts = append(attempts, other.attempts...)
 	return reasoningRecoveryOutcome{
 		encryptedContentDowngraded: o.encryptedContentDowngraded || other.encryptedContentDowngraded,
+		compactionBlobStripped:     o.compactionBlobStripped || other.compactionBlobStripped,
 		sessionReset:               o.sessionReset || other.sessionReset,
 		failed:                     o.failed || other.failed,
 		attempts:                   attempts,
@@ -63,6 +65,9 @@ func (o *reasoningRecoveryOutcome) setFirstResult(result string) {
 func (o reasoningRecoveryOutcome) appendWarnings(header http.Header) {
 	if o.encryptedContentDowngraded {
 		appendCompatibilityWarning(header, "reasoning_encrypted_content_downgraded")
+	}
+	if o.compactionBlobStripped {
+		appendCompatibilityWarning(header, "compaction_blob_stripped")
 	}
 	if o.sessionReset {
 		appendCompatibilityWarning(header, "reasoning_session_reset")
@@ -100,7 +105,13 @@ func (a *Adapter) recoverReasoningDecodeFailure(
 		return cloneBufferedResponse(response, errorBody, truncated), requestURL, reasoningRecoveryOutcome{}
 	}
 	original := cloneBufferedResponse(response, errorBody, truncated)
-	if truncated || isCompactionBlobDecodeFailure(errorBody) || !isReasoningDecodeFailure(errorBody) {
+	if truncated {
+		return original, requestURL, reasoningRecoveryOutcome{}
+	}
+	if isCompactionBlobDecodeFailure(errorBody) {
+		return a.recoverCompactionBlobDecodeFailure(ctx, request, accessToken, body, base, original, requestURL, errorBody, truncated)
+	}
+	if !isReasoningDecodeFailure(errorBody) {
 		return original, requestURL, reasoningRecoveryOutcome{}
 	}
 	out := reasoningRecoveryOutcome{}
@@ -200,6 +211,64 @@ func (a *Adapter) recoverReasoningDecodeFailure(
 	out.encryptedContentDowngraded = encryptedChanged
 	out.sessionReset = true
 	return retry, retryURL, out
+}
+
+
+func (a *Adapter) recoverCompactionBlobDecodeFailure(
+	ctx context.Context,
+	request provider.ResponseResourceRequest,
+	accessToken string,
+	body []byte,
+	base string,
+	original *http.Response,
+	requestURL string,
+	errorBody []byte,
+	truncated bool,
+) (*http.Response, string, reasoningRecoveryOutcome) {
+	portableBody, changed := replaceCompactionItemsWithBoundary(body)
+	if !changed {
+		return original, requestURL, reasoningRecoveryOutcome{}
+	}
+	out := reasoningRecoveryOutcome{}
+	out.recordHidden("compaction_blob_rejected", "pending_recovery", original, errorBody, truncated)
+	retry, retryURL, retryErr := a.retryCompactionBlobRecovery(ctx, request, accessToken, portableBody, base)
+	if retryErr != nil {
+		a.logReasoningRecovery(request, base, "compaction_blob", "transport_failed", 0, retryErr)
+		out.setFirstResult("transport_failed")
+		out.failed = true
+		return original, requestURL, out
+	}
+	if err := normalizeGzipResponse(retry); err != nil {
+		_ = retry.Body.Close()
+		a.logReasoningRecovery(request, base, "compaction_blob", "response_decode_failed", retry.StatusCode, err)
+		out.setFirstResult("response_decode_failed")
+		out.failed = true
+		return original, requestURL, out
+	}
+	if isHTTPSuccess(retry.StatusCode) || retry.StatusCode == http.StatusTooManyRequests {
+		_ = original.Body.Close()
+		result := "recovered_compaction_blob_stripped"
+		if retry.StatusCode == http.StatusTooManyRequests {
+			result = "replaced_by_rate_limit"
+		}
+		a.logReasoningRecovery(request, base, "compaction_blob", result, retry.StatusCode, nil)
+		out.setFirstResult(result)
+		out.compactionBlobStripped = true
+		return retry, retryURL, out
+	}
+	retryBody, retryTrunc, inspectErr := provider.ReadDiagnosticBody(retry.Body)
+	_ = retry.Body.Close()
+	a.logReasoningRecovery(request, base, "compaction_blob", "retry_rejected", retry.StatusCode, inspectErr)
+	out.recordHidden("compaction_blob_retry", "retry_rejected", retry, retryBody, retryTrunc)
+	out.setFirstResult("retry_rejected")
+	out.failed = true
+	return original, requestURL, out
+}
+
+func (a *Adapter) retryCompactionBlobRecovery(ctx context.Context, request provider.ResponseResourceRequest, accessToken string, body []byte, base string) (*http.Response, string, error) {
+	retryRequest := request
+	retryRequest.IdempotencyID, _ = security.NewOpaqueToken(18)
+	return a.doResponseRequest(infraegress.WithPhysicalCallStage(ctx, "compaction_retry"), retryRequest, accessToken, body, base)
 }
 
 func (a *Adapter) retryReasoningRecovery(ctx context.Context, request provider.ResponseResourceRequest, accessToken string, body []byte, base string, resetSession bool) (*http.Response, string, error) {
