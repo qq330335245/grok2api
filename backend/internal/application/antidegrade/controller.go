@@ -88,6 +88,19 @@ func (c *Controller) Enforce() bool { return c != nil && c.cfg.Enforce() }
 func (c *Controller) AppliesTo(provider accountdomain.Provider) bool {
 	return c != nil && c.config().AppliesTo(provider)
 }
+
+func (c *Controller) IsSharedExit(ctx context.Context, nodeID uint64) bool {
+	if c == nil || nodeID == 0 {
+		return false
+	}
+	nodes, err := c.lookup(ctx)
+	if err != nil {
+		return false
+	}
+	node, ok := c.nodeByID(nodes, nodeID)
+	return ok && node.SharedExit
+}
+
 func (c *Controller) ActiveFor(provider accountdomain.Provider) bool {
 	return c.Enforce() && c.AppliesTo(provider)
 }

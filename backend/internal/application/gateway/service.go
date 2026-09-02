@@ -1401,16 +1401,18 @@ attemptLoop:
 					code = ErrorAccountQuarantined
 					public = "账号因缺少推理被隔离"
 				}
-				lastFailure = &UpstreamFailure{
-					HTTPStatus: http.StatusServiceUnavailable, Code: code,
-					PublicMessage: public, AccountID: lease.Credential.ID, AccountName: lease.Credential.Name,
-					Cause: admitErr,
+				if !hasExplicitUpstreamError(lastFailure) {
+					lastFailure = &UpstreamFailure{
+						HTTPStatus: http.StatusServiceUnavailable, Code: code,
+						PublicMessage: public, AccountID: lease.Credential.ID, AccountName: lease.Credential.Name,
+						Cause: admitErr,
+					}
 				}
 				antiDegradePin = 0
 				if errors.Is(admitErr, antidegrade.ErrNoEligibleExitIP) {
 					noExitFailovers++
-					s.logger.Info("antidegrade_admit_failover", "request_id", input.RequestID, "account_id", lease.Credential.ID, "error", admitErr, "no_exit", noExitFailovers)
-					if noExitFailovers >= 3 {
+					s.logger.Info("antidegrade_admit_failover", "request_id", input.RequestID, "account_id", lease.Credential.ID, "error", admitErr, "no_exit", noExitFailovers, "kept_upstream", hasExplicitUpstreamError(lastFailure))
+					if hasExplicitUpstreamError(lastFailure) || noExitFailovers >= 3 {
 						break attemptLoop
 					}
 					continue
@@ -1482,10 +1484,8 @@ attemptLoop:
 			}
 			lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
 			usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
-			if usedNode != 0 {
-				excludedEgressNodes[usedNode] = true
-			}
-			if anti != nil && anti.ActiveFor(credential.Provider) {
+			excludeAntiDegradeNode(ctx, anti, excludedEgressNodes, usedNode)
+			if anti != nil && anti.ActiveFor(credential.Provider) && isProxyDialFailure(err) {
 				anti.OnProxyFailure(credential, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
 			}
 			if !isRetryableTransportFailure(credential.Provider, err) {
@@ -1759,7 +1759,7 @@ attemptLoop:
 							writeCancel()
 						} else if anti != nil && anti.ActiveFor(credential.Provider) {
 							usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
-							excludedEgressNodes[usedNode] = true
+							excludeAntiDegradeNode(ctx, anti, excludedEgressNodes, usedNode)
 							anti.OnIdleStream(credential, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
 							antiDegradePin = credential.ID
 							s.logger.Warn(logPrefix+"_ip_retry", "request_id", input.RequestID, "account_id", credential.ID, "node_id", usedNode, "quarantined", anti.AccountQuarantined(credential.ID))
@@ -1780,7 +1780,7 @@ attemptLoop:
 				}
 				if verdict == QualityWithhold && anti != nil && anti.ActiveFor(credential.Provider) {
 					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
-					excludedEgressNodes[usedNode] = true
+					excludeAntiDegradeNode(ctx, anti, excludedEgressNodes, usedNode)
 					noteAntiMiss(credential, usedNode)
 				}
 				hasNextAccount := qualityAccountAttempts < holdCfg.MaxAttempts
@@ -1951,6 +1951,42 @@ func auditRequestSucceeded(statusCode int, errorCode string) bool {
 
 func isRetryableTransportFailure(providerValue accountdomain.Provider, err error) bool {
 	return providerValue != accountdomain.ProviderBuild || !neterrorpkg.IsResponseHeaderTimeout(err)
+}
+
+func isProxyDialFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "socks") || strings.Contains(msg, "proxyconnect") || strings.Contains(msg, "proxy connect")
+}
+
+func excludeAntiDegradeNode(ctx context.Context, anti *antidegrade.Controller, excluded map[uint64]bool, nodeID uint64) {
+	if nodeID == 0 || excluded == nil {
+		return
+	}
+	if anti != nil && anti.IsSharedExit(ctx, nodeID) {
+		return
+	}
+	excluded[nodeID] = true
+}
+
+func hasExplicitUpstreamError(failure *UpstreamFailure) bool {
+	if failure == nil {
+		return false
+	}
+	switch failure.Code {
+	case ErrorEgressUnavailable, ErrorAccountQuarantined, ErrorQualityDegraded:
+		return false
+	}
+	if failure.HTTPStatus == http.StatusTooManyRequests || failure.Fingerprint == "429:team_model_rate_limit" {
+		return true
+	}
+	switch failure.Code {
+	case "upstream_network_error", "upstream_header_timeout", "upstream_stream_idle_timeout", "upstream_stream_empty", "upstream_timeout":
+		return false
+	}
+	return failure.HTTPStatus >= 400 && failure.HTTPStatus <= 599
 }
 
 func isSSOCredentialRejected(err error, credential accountdomain.Credential) bool {
