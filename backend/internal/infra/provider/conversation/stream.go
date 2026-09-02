@@ -11,23 +11,7 @@ import (
 )
 
 const (
-<<<<<<< HEAD
-	maxDeferredSearchTextBytes       = 8 << 20
-	maxDeferredReasoningSummaryBytes = 8 << 20
-=======
 	maxDeferredSearchTextBytes = 8 << 20
-
-	// contentDoomLoopThreshold 连续重复同一可见内容增量时终止流。真正的
-	// 内容循环会消耗配额和客户端上下文，因此远低于推理上限；但仍需容纳
-	// 合法重复：markdown 分隔线与表格边框会以相同单字符增量（"-"、"="、
-	// "|"）连续输出。
-	contentDoomLoopThreshold = 128
-
-	// reasoningDoomLoopThreshold 高于内容阈值：high/xhigh 推理会大量重复
-	// 同一短标记（"so"、"hmm"、"wait"、列表符号）。共用低阈值会过早终止
-	// 有效的深度推理响应。
-	reasoningDoomLoopThreshold = 256
->>>>>>> 4793b092 (fix(conversation): stream first-wins reasoning live to Chat and Anthropic)
 )
 
 // ConvertResponseStream 将 Responses SSE 转换为 Chat Completions 或 Anthropic Messages SSE。
