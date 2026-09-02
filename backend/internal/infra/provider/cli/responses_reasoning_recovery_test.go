@@ -179,7 +179,7 @@ func TestRecoverReasoningDecodeFailureStaysOnXAIFallbackPlane(t *testing.T) {
 	if decode == nil || decode.Result != "recovered_encrypted_content_stripped" {
 		t.Fatalf("recovered attempts = %#v", response.RecoveredAttempts)
 	}
-	if decode.Diagnostic.StatusCode != http.StatusBadRequest || !strings.Contains(string(decode.Diagnostic.Body), "compaction blob") {
+	if decode.Diagnostic.StatusCode != http.StatusBadRequest || !strings.Contains(string(decode.Diagnostic.Body), "encrypted_content") {
 		t.Fatalf("hidden 400 = %#v", decode.Diagnostic)
 	}
 }
