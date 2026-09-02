@@ -1483,11 +1483,6 @@ attemptLoop:
 				continue
 			}
 			lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
-			usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
-			excludeAntiDegradeNode(ctx, anti, excludedEgressNodes, usedNode)
-			if anti != nil && anti.ActiveFor(credential.Provider) && isProxyDialFailure(err) {
-				anti.OnProxyFailure(credential, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
-			}
 			if !isRetryableTransportFailure(credential.Provider, err) {
 				break
 			}
@@ -1757,12 +1752,8 @@ attemptLoop:
 								s.logger.Warn(logPrefix+"_retry", "request_id", input.RequestID, "account_id", credential.ID, "cooldown", holdCfg.IdleAccountCooldown)
 							}
 							writeCancel()
-						} else if anti != nil && anti.ActiveFor(credential.Provider) {
-							usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
-							excludeAntiDegradeNode(ctx, anti, excludedEgressNodes, usedNode)
-							anti.OnIdleStream(credential, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
-							antiDegradePin = credential.ID
-							s.logger.Warn(logPrefix+"_ip_retry", "request_id", input.RequestID, "account_id", credential.ID, "node_id", usedNode, "quarantined", anti.AccountQuarantined(credential.ID))
+						} else {
+							s.logger.Warn(logPrefix+"_skip_antidegrade", "request_id", input.RequestID, "account_id", credential.ID)
 						}
 					}
 					if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
@@ -1951,14 +1942,6 @@ func auditRequestSucceeded(statusCode int, errorCode string) bool {
 
 func isRetryableTransportFailure(providerValue accountdomain.Provider, err error) bool {
 	return providerValue != accountdomain.ProviderBuild || !neterrorpkg.IsResponseHeaderTimeout(err)
-}
-
-func isProxyDialFailure(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "socks") || strings.Contains(msg, "proxyconnect") || strings.Contains(msg, "proxy connect")
 }
 
 func excludeAntiDegradeNode(ctx context.Context, anti *antidegrade.Controller, excluded map[uint64]bool, nodeID uint64) {
