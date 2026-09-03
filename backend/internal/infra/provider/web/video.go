@@ -17,6 +17,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	domainegress "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
+	"github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
@@ -251,8 +252,13 @@ func boundWebMediaDiagnostic(value string, limit int) string {
 }
 
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
-	if strings.TrimSpace(request.ImageURL) != "" || len(request.ReferenceURLs) > 0 {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, fmt.Errorf("Grok Web 当前仅支持文本生视频；图片视频请使用 Build 或 Console Provider"))
+	if len(request.ReferenceAudios) > 0 {
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, fmt.Errorf("Grok Web 暂不支持 reference_audios"))
+	}
+	imageURL := strings.TrimSpace(request.ImageURL)
+	referenceURLs := trimNonEmpty(request.ReferenceURLs)
+	if imageURL != "" && len(referenceURLs) > 0 {
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, fmt.Errorf("image 不能与 reference_images 同时使用"))
 	}
 	cfg := a.config()
 	token, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
@@ -274,7 +280,22 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if resolution == "" {
 		resolution = "720p"
 	}
-	payload := videoCreatePayload(request.Prompt, ratio, resolution, segments[0])
+	mediaKey := ""
+	rawAssets := referenceURLs
+	if imageURL != "" {
+		mediaKey = "imageToVideo"
+		rawAssets = []string{imageURL}
+	} else if len(referenceURLs) > 0 {
+		mediaKey = "referenceToVideo"
+	}
+	var inputAssets []string
+	if len(rawAssets) > 0 {
+		inputAssets, err = a.prepareVideoInputAssets(ctx, cfg, lease, token, rawAssets)
+		if err != nil {
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoCreateFailureStage(err), 0, err)
+		}
+	}
+	payload := videoCreatePayload(request.Prompt, ratio, resolution, segments[0], inputAssets, mediaKey)
 	response, err := a.postJSON(ctx, cfg, lease, token, cfg.BaseURL+"/rest/app-chat/conversations/new", payload, time.Duration(cfg.VideoTimeoutSeconds)*time.Second)
 	if err != nil {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoCreateFailureStage(err), 0, err)
@@ -539,11 +560,67 @@ func applyFreeWebVideoDurationCap(seconds, cap int, credential account.Credentia
 	return seconds
 }
 
+func trimNonEmpty(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func (a *Adapter) prepareVideoInputAssets(ctx context.Context, cfg Config, lease *egress.Lease, token string, rawURLs []string) ([]string, error) {
+	assets := make([]string, 0, len(rawURLs))
+	for _, rawURL := range rawURLs {
+		image, err := a.loadChatImage(ctx, lease, rawURL, cfg.MaxInputImageBytes)
+		if err != nil {
+			return nil, err
+		}
+		uploaded, err := a.uploadFileV2Direct(ctx, cfg, lease, token, image, cfg.BaseURL+"/imagine", imagineSelfUploadSource, "video_reference_upload")
+		if err != nil {
+			return nil, err
+		}
+		if uploaded.MetadataID == "" {
+			return nil, fmt.Errorf("上传视频参考图片成功但上游未返回 fileMetadataId")
+		}
+		assets = append(assets, uploaded.MetadataID)
+	}
+	return assets, nil
+}
+
 // videoCreatePayload mirrors the current Grok Imagine browser request.
-// In particular, the generation parameters belong in mediaGenInput rather
-// than the legacy modelConfigOverride map. Keeping this shape explicit also
-// prevents text-to-video from depending on a synthetic media post.
-func videoCreatePayload(prompt, ratio, resolution string, seconds int) map[string]any {
+// Text uses mediaGenInput.textToVideo. First-frame uses imageToVideo with
+// mode=custom. Reference images use referenceToVideo without mode.
+// None of these paths create a synthetic media post.
+func videoCreatePayload(prompt, ratio, resolution string, seconds int, inputAssets []string, mediaKey string) map[string]any {
+	media := map[string]any{}
+	switch mediaKey {
+	case "imageToVideo":
+		media["imageToVideo"] = map[string]any{
+			"prompt":         prompt,
+			"inputAssets":    inputAssets,
+			"aspectRatio":    ratio,
+			"duration":       seconds,
+			"resolutionName": resolution,
+			"mode":           "custom",
+		}
+	case "referenceToVideo":
+		media["referenceToVideo"] = map[string]any{
+			"prompt":         prompt,
+			"inputAssets":    inputAssets,
+			"aspectRatio":    ratio,
+			"duration":       seconds,
+			"resolutionName": resolution,
+		}
+	default:
+		media["textToVideo"] = map[string]any{
+			"prompt":         prompt,
+			"aspectRatio":    ratio,
+			"duration":       seconds,
+			"resolutionName": resolution,
+		}
+	}
 	return map[string]any{
 		"modelName":            "imagine-video-gen",
 		"message":              prompt + " --mode=custom",
@@ -556,14 +633,7 @@ func videoCreatePayload(prompt, ratio, resolution string, seconds int) map[strin
 				"modelMap": map[string]any{},
 			},
 		},
-		"mediaGenInput": map[string]any{
-			"textToVideo": map[string]any{
-				"prompt":         prompt,
-				"aspectRatio":    ratio,
-				"duration":       seconds,
-				"resolutionName": resolution,
-			},
-		},
-		"kind": "CONVERSATION_KIND_IMAGINE",
+		"mediaGenInput": media,
+		"kind":          "CONVERSATION_KIND_IMAGINE",
 	}
 }

@@ -1549,7 +1549,7 @@ func TestParseVideoStreamFixture(t *testing.T) {
 }
 
 func TestTextToVideoPayloadMatchesCapturedMediaGenInputShape(t *testing.T) {
-	payload := videoCreatePayload("雨后天晴！", "9:16", "480p", 6)
+	payload := videoCreatePayload("雨后天晴！", "9:16", "480p", 6, nil, "")
 	if len(payload) != 8 || payload["modelName"] != "imagine-video-gen" ||
 		payload["message"] != "雨后天晴！ --mode=custom" ||
 		payload["enableImageStreaming"] != true || payload["enableSideBySide"] != true ||
@@ -1587,6 +1587,193 @@ func TestTextToVideoPayloadMatchesCapturedMediaGenInputShape(t *testing.T) {
 		if _, exists := payload[field]; exists {
 			t.Fatalf("legacy field %q leaked into text-to-video payload: %#v", field, payload)
 		}
+	}
+	for _, field := range []string{"imageToVideo", "referenceToVideo"} {
+		if _, exists := mediaGenInput[field]; exists {
+			t.Fatalf("text-to-video leaked %q: %#v", field, mediaGenInput)
+		}
+	}
+}
+
+func TestImageToVideoPayloadMatchesCapturedMediaGenInputShape(t *testing.T) {
+	payload := videoCreatePayload("孙悟空发射龟派气功", "16:9", "480p", 6, []string{"0b1715dd-5e71-4ac1-ad54-17c6273219ac"}, "imageToVideo")
+	mediaGenInput, ok := payload["mediaGenInput"].(map[string]any)
+	if !ok {
+		t.Fatalf("mediaGenInput = %#v", payload["mediaGenInput"])
+	}
+	imageToVideo, ok := mediaGenInput["imageToVideo"].(map[string]any)
+	if !ok || imageToVideo["prompt"] != "孙悟空发射龟派气功" || imageToVideo["aspectRatio"] != "16:9" ||
+		imageToVideo["duration"] != 6 || imageToVideo["resolutionName"] != "480p" || imageToVideo["mode"] != "custom" {
+		t.Fatalf("imageToVideo = %#v", mediaGenInput["imageToVideo"])
+	}
+	assets, ok := imageToVideo["inputAssets"].([]string)
+	if !ok || len(assets) != 1 || assets[0] != "0b1715dd-5e71-4ac1-ad54-17c6273219ac" {
+		t.Fatalf("inputAssets = %#v", imageToVideo["inputAssets"])
+	}
+	if _, exists := mediaGenInput["textToVideo"]; exists {
+		t.Fatalf("textToVideo leaked into image-to-video: %#v", mediaGenInput)
+	}
+	for _, field := range []string{"temporary", "videoGenModelConfig", "parentPostId"} {
+		if _, exists := payload[field]; exists {
+			t.Fatalf("legacy field %q leaked: %#v", field, payload)
+		}
+	}
+}
+
+func TestReferenceToVideoPayloadMatchesCapturedMediaGenInputShape(t *testing.T) {
+	ids := []string{
+		"fb5dfd50-eece-4ac4-99ab-68515651b18b",
+		"9b399d17-be46-48e0-a1f5-ad304ff3af54",
+		"b255988d-0d51-4091-b627-e87f7db752f3",
+		"ae60c77d-7f9e-4b68-a44b-704dd25c99da",
+	}
+	payload := videoCreatePayload("参考1的女生穿着参考2的服装", "16:9", "480p", 6, ids, "referenceToVideo")
+	mediaGenInput, ok := payload["mediaGenInput"].(map[string]any)
+	if !ok {
+		t.Fatalf("mediaGenInput = %#v", payload["mediaGenInput"])
+	}
+	referenceToVideo, ok := mediaGenInput["referenceToVideo"].(map[string]any)
+	if !ok || referenceToVideo["prompt"] != "参考1的女生穿着参考2的服装" || referenceToVideo["aspectRatio"] != "16:9" ||
+		referenceToVideo["duration"] != 6 || referenceToVideo["resolutionName"] != "480p" {
+		t.Fatalf("referenceToVideo = %#v", mediaGenInput["referenceToVideo"])
+	}
+	if _, exists := referenceToVideo["mode"]; exists {
+		t.Fatalf("HAR referenceToVideo has no mode: %#v", referenceToVideo)
+	}
+	assets, ok := referenceToVideo["inputAssets"].([]string)
+	if !ok || len(assets) != 4 || assets[0] != ids[0] || assets[3] != ids[3] {
+		t.Fatalf("inputAssets = %#v", referenceToVideo["inputAssets"])
+	}
+	if _, exists := mediaGenInput["imageToVideo"]; exists {
+		t.Fatalf("imageToVideo leaked into reference-to-video: %#v", mediaGenInput)
+	}
+}
+
+func TestGenerateVideoUploadsAssetsIntoCapturedMediaGenInput(t *testing.T) {
+	const tinyPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	successBody := `{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100,"videoPostId":"post_1","videoUrl":"/videos/final.mp4"}}}}`
+	tests := []struct {
+		name      string
+		image     string
+		refs      []string
+		wantKey   string
+		wantCount int
+		wantMode  bool
+	}{
+		{name: "image-to-video", image: tinyPNG, wantKey: "imageToVideo", wantCount: 1, wantMode: true},
+		{name: "reference-to-video", refs: []string{tinyPNG, tinyPNG}, wantKey: "referenceToVideo", wantCount: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var uploads int
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/rest/media/post/create":
+					t.Error("image/reference video unexpectedly used the retired media-post endpoint")
+					writer.WriteHeader(http.StatusInternalServerError)
+				case "/http/upload-file-v2/direct":
+					uploads++
+					if err := request.ParseMultipartForm(2 << 20); err != nil {
+						t.Errorf("multipart: %v", err)
+						writer.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					if request.FormValue("file_source") != imagineSelfUploadSource {
+						t.Errorf("file_source = %q", request.FormValue("file_source"))
+					}
+					file, header, err := request.FormFile("file")
+					if err != nil {
+						t.Errorf("file part: %v", err)
+						writer.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					defer file.Close()
+					content, _ := io.ReadAll(file)
+					if header.Header.Get("Content-Type") != "image/png" || len(content) == 0 {
+						t.Errorf("upload content-type=%q bytes=%d", header.Header.Get("Content-Type"), len(content))
+					}
+					writer.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(writer, fmt.Sprintf(`{"uploadId":"upload-%d","fileMetadata":{"fileMetadataId":"metadata-%d","fileUri":"users/test/reference/content"}}`, uploads, uploads))
+				case "/rest/app-chat/conversations/new":
+					var payload map[string]any
+					if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+						t.Errorf("decode video payload: %v", err)
+					}
+					mediaGenInput, _ := payload["mediaGenInput"].(map[string]any)
+					block, ok := mediaGenInput[test.wantKey].(map[string]any)
+					if !ok {
+						t.Errorf("%s payload = %#v", test.wantKey, payload)
+						writer.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					assets, _ := block["inputAssets"].([]any)
+					if len(assets) != test.wantCount {
+						t.Errorf("inputAssets = %#v", block["inputAssets"])
+					}
+					if test.wantMode && block["mode"] != "custom" {
+						t.Errorf("mode = %#v", block["mode"])
+					}
+					if !test.wantMode {
+						if _, exists := block["mode"]; exists {
+							t.Errorf("unexpected mode in referenceToVideo: %#v", block)
+						}
+					}
+					writer.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(writer, successBody)
+				default:
+					writer.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			encryptedToken, err := cipher.Encrypt("test-sso")
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := infraegress.NewManager(egressRepositoryStub{}, cipher)
+			adapter := NewAdapter(Config{
+				BaseURL: server.URL, StatsigMode: "manual", StatsigManualValue: "test",
+				VideoTimeoutSeconds: 5, MaxInputImageBytes: 1 << 20,
+			}, manager, cipher, nil, nil)
+			result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+				Credential:    account.Credential{ID: 1, Provider: account.ProviderWeb, EncryptedAccessToken: encryptedToken},
+				Prompt:        "animate",
+				Duration:      6,
+				AspectRatio:   "16:9",
+				Resolution:    "480p",
+				ImageURL:      test.image,
+				ReferenceURLs: test.refs,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.URL != "https://assets.grok.com/videos/final.mp4" {
+				t.Fatalf("result = %#v", result)
+			}
+			if uploads != test.wantCount {
+				t.Fatalf("uploads = %d, want %d", uploads, test.wantCount)
+			}
+		})
+	}
+}
+
+func TestGenerateVideoRejectsCombinedImageAndReferenceAudios(t *testing.T) {
+	adapter := NewAdapter(Config{}, nil, nil, nil, nil)
+	_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Prompt: "x", Duration: 6, ImageURL: "https://example.com/a.png", ReferenceURLs: []string{"https://example.com/b.png"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "不能与 reference_images") {
+		t.Fatalf("combined error = %v", err)
+	}
+	_, err = adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Prompt: "x", Duration: 6, ReferenceAudios: []string{"voice_1"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "reference_audios") {
+		t.Fatalf("audio error = %v", err)
 	}
 }
 
