@@ -164,7 +164,7 @@ qualityGuard:
   # of the last body. Sidecar qualityGuard.enabled stays false until you
   # start the quality-guard profile.
   requestRetry:
-    enabled: true
+    enabled: false
     maxAttempts: 6
     holdTimeout: 30s
     minOutputTokens: 8
