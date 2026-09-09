@@ -64,8 +64,13 @@ type Adapter struct {
 	fallbackMarker FallbackMarker
 	uploadIssuer   VideoUploadIssuer
 	replay         *reasoningreplay.ReasoningReplay
-	compaction     *gatewayCompactionCodec
-	logger         *slog.Logger
+	// conversationReasoningCache bridges Chat/Messages tool calls to the
+	// upstream Responses reasoning proof. It is deliberately separate from
+	// the persistent native Responses replay, and its keys never contain an
+	// account ID: encrypted reasoning is portable across Build accounts.
+	conversationReasoningCache *conversation.ReasoningCache
+	compaction                 *gatewayCompactionCodec
+	logger                     *slog.Logger
 }
 
 func NewAdapter(cfg Config, cipher *security.Cipher) *Adapter {
@@ -78,7 +83,9 @@ func NewAdapter(cfg Config, cipher *security.Cipher) *Adapter {
 	agentID := uuid.NewString()
 	adapter := &Adapter{
 		cfg: cfg, http: httpClient, cipher: cipher, base: transport,
-		agentID: agentID, modelsETags: make(map[uint64]string), compaction: newGatewayCompactionCodec(cipher), logger: slog.Default(),
+		agentID: agentID, modelsETags: make(map[uint64]string),
+		conversationReasoningCache: conversation.NewReasoningCache(0, 0),
+		compaction:                 newGatewayCompactionCodec(cipher), logger: slog.Default(),
 	}
 	adapter.oauth = newOAuthClient(httpClient, func() string { return adapter.config().ClientVersion })
 	return adapter
@@ -238,9 +245,16 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	var conversationOptions conversation.ResponseOptions
 	cacheRoute := buildPromptCacheRoute{}
 	compactionRequested := false
+	// Resolve the physical inference plane before normalization so Chat and
+	// Anthropic conversion can use the same scope for capture and restoration.
+	// The scope contains the trusted session seed, model, and plane only; it is
+	// intentionally independent of the selected account.
+	primaryBase := a.primaryBaseURL()
+	base := a.inferenceBaseForOperation(request.Credential, request.Billing, request.Method, request.Path)
+	conversationScope := a.conversationReasoningScope(request, base)
 	if request.NormalizeBody {
 		if request.Operation == conversation.OperationChat || request.Operation == conversation.OperationMessages {
-			body, conversationOptions, err = conversation.ConvertRequestWithOptions(body, request.Model, request.Operation)
+			body, conversationOptions, err = conversation.ConvertRequestWithReasoningReplay(body, request.Model, request.Operation, a.conversationReasoningCache, conversationScope)
 			if err == nil && conversationOptions.ReasoningEffortSet && request.NormalizedMetadata != nil {
 				request.NormalizedMetadata.ReasoningEffort = conversationOptions.ReasoningEffort
 			}
@@ -280,6 +294,8 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	}
 	if request.Operation == conversation.OperationMessages && conversationOptions.AnthropicWebSearch {
 		request.ReasoningReplayKey = ""
+		conversationScope = ""
+		conversationOptions = conversationOptions.WithReasoningReplay(nil, "")
 	}
 	if compactionRequested {
 		body, err = prepareGatewayCompactionSample(body)
@@ -316,10 +332,11 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 		return a.forwardGatewayCompaction(ctx, request, accessToken, body, warnings)
 	}
 	// Explicit mode wins; in auto mode only confirmed Super accounts with bot_flag_source/bfs in {1,2} default to XAI.
-	primaryBase := a.primaryBaseURL()
-	base := a.inferenceBaseForOperation(request.Credential, request.Billing, request.Method, request.Path)
-	// Cache affinity and reasoning replay use separate identities. Replay is also bound to the actual account and upstream plane,
-	// preventing opaque reasoning issued for one account or Build plane from reaching another scope.
+	// Prompt-cache affinity and reasoning replay use separate identities. The
+	// native Responses replay remains account-scoped, while the Chat/Messages
+	// bridge is scoped to the client session, model, and physical plane only;
+	// encrypted reasoning is intentionally portable across accounts on that
+	// plane.
 	replayBaseBody := body
 	body, replayKey := a.applyReasoningReplay(ctx, request, replayBaseBody, base)
 	resp, reqURL, err := a.doResponseRequest(ctx, request, accessToken, body, base)
@@ -359,6 +376,7 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 					recoveredPrimaryFailure = bufferedFailureDiagnostic(primaryResp, primaryBody, primaryTruncated)
 					a.activateBuildAPIFallback(ctx, &request.Credential)
 					resp, reqURL, base, body, replayKey = fallbackResp, fallbackURL, fallbackBase, fallbackBody, fallbackReplayKey
+					conversationOptions = conversationOptions.WithReasoningReplay(a.conversationReasoningCache, a.conversationReasoningScope(request, base))
 					reasoningRecovery = reasoningRecovery.merge(fallbackRecovery)
 				} else {
 					if fallbackErr == nil {
@@ -527,6 +545,20 @@ func (a *Adapter) scopedReasoningReplayKey(request provider.ResponseResourceRequ
 		plane = "xai"
 	}
 	digest := sha256.Sum256([]byte(fmt.Sprintf("grok2api:reasoning-replay:v2:%s:%d:%s", seed, request.Credential.ID, plane)))
+	return hex.EncodeToString(digest[:])
+}
+
+func (a *Adapter) conversationReasoningScope(request provider.ResponseResourceRequest, base string) string {
+	seed := strings.TrimSpace(request.ReasoningReplayKey)
+	model := strings.ToLower(strings.TrimSpace(request.Model))
+	if seed == "" || model == "" {
+		return ""
+	}
+	plane := "build"
+	if fallback := a.fallbackBaseURL(); fallback != "" && strings.EqualFold(strings.TrimRight(base, "/"), fallback) {
+		plane = "xai"
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("grok2api:conversation-reasoning:v1:%s:%s:%s", seed, model, plane)))
 	return hex.EncodeToString(digest[:])
 }
 
