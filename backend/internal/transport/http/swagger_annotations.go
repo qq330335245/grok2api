@@ -50,30 +50,42 @@ type SwaggerImageReference struct {
 
 // SwaggerImageEditRequest 表示图片编辑请求。
 type SwaggerImageEditRequest struct {
-	Model          string                `json:"model" example:"grok-imagine-image-edit"`
-	Prompt         string                `json:"prompt" example:"Change the background to black"`
-	Image          SwaggerImageReference `json:"image"`
-	N              int                   `json:"n" example:"1"`
-	Size           string                `json:"size,omitempty" example:"1024x1024"`
-	AspectRatio    string                `json:"aspect_ratio,omitempty" example:"1:1"`
-	Resolution     string                `json:"resolution,omitempty" example:"1k"`
-	ResponseFormat string                `json:"response_format,omitempty" example:"url"`
-	Stream         bool                  `json:"stream,omitempty" example:"false"`
-	PartialImages  int                   `json:"partial_images,omitempty" example:"0"`
+	Model            string                   `json:"model" example:"grok-imagine-image-edit"`
+	Prompt           string                   `json:"prompt" example:"Change the background to black"`
+	Image            SwaggerImageReference    `json:"image"`
+	Mask             *SwaggerImageReference   `json:"mask,omitempty"`
+	SelectionRegions []SwaggerSelectionRegion `json:"selection_regions,omitempty"`
+	N                int                      `json:"n" example:"1"`
+	Size             string                   `json:"size,omitempty" example:"1024x1024"`
+	AspectRatio      string                   `json:"aspect_ratio,omitempty" example:"1:1"`
+	Resolution       string                   `json:"resolution,omitempty" example:"1k"`
+	ResponseFormat   string                   `json:"response_format,omitempty" example:"url"`
+	Stream           bool                     `json:"stream,omitempty" example:"false"`
+	PartialImages    int                      `json:"partial_images,omitempty" example:"0"`
+}
+
+// SwaggerSelectionRegion 表示 Grok Imagine 精确编辑的归一化多边形选区。
+type SwaggerSelectionRegion struct {
+	Outer SwaggerSelectionPath   `json:"outer"`
+	Holes []SwaggerSelectionPath `json:"holes,omitempty"`
+}
+
+type SwaggerSelectionPath struct {
+	Points []float64 `json:"points"`
 }
 
 // SwaggerVideoGenerationRequest 表示视频生成请求。
 // image 与 reference_images/reference_audios 互斥；参考图模式 resolution 最高 720p。
 type SwaggerVideoGenerationRequest struct {
-	Model            string                    `json:"model" example:"grok-imagine-video"`
-	Prompt           string                    `json:"prompt" example:"A cinematic tracking shot in the rain"`
-	Duration         int                       `json:"duration" example:"8"`
-	AspectRatio      string                    `json:"aspect_ratio,omitempty" example:"16:9"`
-	Resolution       string                    `json:"resolution,omitempty" example:"720p"`
-	Image            *SwaggerVideoMediaInput   `json:"image,omitempty"`
-	ReferenceImages  []SwaggerVideoMediaInput  `json:"reference_images,omitempty"`
-	ReferenceAudios  []SwaggerVideoAudioInput  `json:"reference_audios,omitempty"`
-	Video            *SwaggerVideoMediaInput   `json:"video,omitempty"`
+	Model           string                   `json:"model" example:"grok-imagine-video"`
+	Prompt          string                   `json:"prompt" example:"A cinematic tracking shot in the rain"`
+	Duration        int                      `json:"duration" example:"8"`
+	AspectRatio     string                   `json:"aspect_ratio,omitempty" example:"16:9"`
+	Resolution      string                   `json:"resolution,omitempty" example:"720p"`
+	Image           *SwaggerVideoMediaInput  `json:"image,omitempty"`
+	ReferenceImages []SwaggerVideoMediaInput `json:"reference_images,omitempty"`
+	ReferenceAudios []SwaggerVideoAudioInput `json:"reference_audios,omitempty"`
+	Video           *SwaggerVideoMediaInput  `json:"video,omitempty"`
 }
 
 // SwaggerVideoMediaInput 表示视频相关的图片/视频输入。

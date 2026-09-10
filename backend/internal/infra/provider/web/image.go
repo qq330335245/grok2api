@@ -25,6 +25,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
+	"github.com/chenyme/grok2api/backend/internal/pkg/imagemask"
 )
 
 const (
@@ -857,7 +858,11 @@ func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEd
 		}
 		assets = append(assets, uploaded.MetadataID)
 	}
-	payload := buildImageEditPayload(request.Prompt, assets, ratio)
+	regions, regionErr := a.resolveImageEditRegions(ctx, lease, request, cfg.MaxInputImageBytes)
+	if regionErr != nil {
+		return invalidImageRequest(regionErr.Error())
+	}
+	payload := buildImageEditPayload(request.Prompt, assets, ratio, regions)
 	response, err := a.postJSONWithReferer(ctx, cfg, lease, token, cfg.BaseURL+"/rest/app-chat/conversations/new", payload, time.Duration(cfg.ImageTimeoutSeconds)*time.Second, cfg.BaseURL+"/imagine")
 	if err != nil {
 		return nil, err
@@ -900,7 +905,30 @@ func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEd
 	return result, err
 }
 
-func buildImageEditPayload(prompt string, assets []string, aspectRatio string) map[string]any {
+func (a *Adapter) resolveImageEditRegions(ctx context.Context, lease *egress.Lease, request provider.ImageEditRequest, maxBytes int64) ([]provider.ImageSelectionRegion, error) {
+	if len(request.SelectionRegions) > 0 {
+		return request.SelectionRegions, nil
+	}
+	maskURL := strings.TrimSpace(request.MaskURL)
+	if maskURL == "" {
+		return nil, nil
+	}
+	mask, err := a.loadChatImage(ctx, lease, maskURL, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	converted, err := imagemask.Regions(mask.Data)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]provider.ImageSelectionRegion, 0, len(converted))
+	for _, region := range converted {
+		out = append(out, provider.ImageSelectionRegion{Outer: region.Outer, Holes: region.Holes})
+	}
+	return out, nil
+}
+
+func buildImageEditPayload(prompt string, assets []string, aspectRatio string, regions []provider.ImageSelectionRegion) map[string]any {
 	imageToImage := map[string]any{
 		"prompt":      prompt,
 		"inputAssets": assets,
@@ -908,11 +936,44 @@ func buildImageEditPayload(prompt string, assets []string, aspectRatio string) m
 	if aspectRatio != "" {
 		imageToImage["aspectRatio"] = aspectRatio
 	}
+	if encoded := encodeImagineSelectionRegions(regions); encoded != nil {
+		imageToImage["selectionRegions"] = encoded
+	}
 	return map[string]any{
 		"modelName": "imagine-image-edit", "message": prompt,
 		"enableImageStreaming": true, "enableSideBySide": true, "sendFinalMetadata": true,
 		"mediaGenInput": map[string]any{"imageToImage": imageToImage},
 	}
+}
+
+func encodeImagineSelectionRegions(regions []provider.ImageSelectionRegion) []map[string]any {
+	if len(regions) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(regions))
+	for _, region := range regions {
+		if len(region.Outer) < 6 {
+			continue
+		}
+		item := map[string]any{"outer": map[string]any{"points": region.Outer}}
+		if len(region.Holes) > 0 {
+			holes := make([]map[string]any, 0, len(region.Holes))
+			for _, hole := range region.Holes {
+				if len(hole) < 6 {
+					continue
+				}
+				holes = append(holes, map[string]any{"points": hole})
+			}
+			if len(holes) > 0 {
+				item["holes"] = holes
+			}
+		}
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func resolveImageEditAspectRatio(aspectRatio, size string) (string, error) {

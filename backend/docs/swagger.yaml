@@ -20,6 +20,8 @@ definitions:
         type: string
       image:
         $ref: '#/definitions/httpserver.SwaggerImageReference'
+      mask:
+        $ref: '#/definitions/httpserver.SwaggerImageReference'
       model:
         example: grok-imagine-image-edit
         type: string
@@ -38,6 +40,10 @@ definitions:
       response_format:
         example: url
         type: string
+      selection_regions:
+        items:
+          $ref: '#/definitions/httpserver.SwaggerSelectionRegion'
+        type: array
       size:
         example: 1024x1024
         type: string
@@ -117,6 +123,22 @@ definitions:
       stream:
         example: false
         type: boolean
+    type: object
+  httpserver.SwaggerSelectionPath:
+    properties:
+      points:
+        items:
+          type: number
+        type: array
+    type: object
+  httpserver.SwaggerSelectionRegion:
+    properties:
+      holes:
+        items:
+          $ref: '#/definitions/httpserver.SwaggerSelectionPath'
+        type: array
+      outer:
+        $ref: '#/definitions/httpserver.SwaggerSelectionPath'
     type: object
   httpserver.SwaggerVideoAudioInput:
     properties:

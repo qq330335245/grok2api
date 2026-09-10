@@ -132,6 +132,9 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 	if !ResolveMedia(request.Model, modeldomain.CapabilityImageEdit) {
 		return invalidConsoleMediaRequest("模型不支持 Console 图片编辑"), nil
 	}
+	if strings.TrimSpace(request.MaskURL) != "" || len(request.SelectionRegions) > 0 {
+		return invalidConsoleMediaRequest("Grok Console 图片编辑暂不支持 mask / selection_regions"), nil
+	}
 	if request.Streaming || request.PartialImages != 0 {
 		return invalidConsoleMediaRequest("Grok Console 标准图片接口不支持 stream 或 partial_images"), nil
 	}

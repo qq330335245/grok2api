@@ -1672,6 +1672,22 @@ func TestConsoleImageEditForwardsMultipleImages(t *testing.T) {
 	}
 }
 
+func TestConsoleImageEditRejectsMask(t *testing.T) {
+	adapter, credential := newConsoleTestAdapter(t, "https://example.invalid")
+	response, err := adapter.EditImage(context.Background(), provider.ImageEditRequest{
+		Credential: credential, Model: "grok-imagine-image", Prompt: "edit",
+		ImageURLs: []string{"https://example.com/a.png"}, MaskURL: "data:image/png;base64,AAAA",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusBadRequest || !bytes.Contains(body, []byte("mask")) {
+		t.Fatalf("status=%d body=%s", response.StatusCode, body)
+	}
+}
+
 func TestConsoleImage20ForwardsQualityAndRejectsItForLegacyModels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if serveTestDPoPToken(t, writer, request) {

@@ -511,18 +511,26 @@ type ImageInput struct {
 }
 
 type ImageEditRequest struct {
-	Credential     account.Credential
-	Model          string
-	Prompt         string
-	ImageURLs      []string
-	Count          int
-	Size           string
-	AspectRatio    string
-	Resolution     string
-	Quality        string
-	ResponseFormat string
-	Streaming      bool
-	PartialImages  int
+	Credential       account.Credential
+	Model            string
+	Prompt           string
+	ImageURLs        []string
+	MaskURL          string
+	SelectionRegions []ImageSelectionRegion
+	Count            int
+	Size             string
+	AspectRatio      string
+	Resolution       string
+	Quality          string
+	ResponseFormat   string
+	Streaming        bool
+	PartialImages    int
+}
+
+// ImageSelectionRegion is a Grok Imagine selectionRegions polygon in 0–1 space.
+type ImageSelectionRegion struct {
+	Outer []float64
+	Holes [][]float64
 }
 
 // VideoOperation selects the official xAI video endpoint family.

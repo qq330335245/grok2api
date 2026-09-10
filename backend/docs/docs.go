@@ -713,6 +713,9 @@ const docTemplate = `{
                 "image": {
                     "$ref": "#/definitions/httpserver.SwaggerImageReference"
                 },
+                "mask": {
+                    "$ref": "#/definitions/httpserver.SwaggerImageReference"
+                },
                 "model": {
                     "type": "string",
                     "example": "grok-imagine-image-edit"
@@ -736,6 +739,12 @@ const docTemplate = `{
                 "response_format": {
                     "type": "string",
                     "example": "url"
+                },
+                "selection_regions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpserver.SwaggerSelectionRegion"
+                    }
                 },
                 "size": {
                     "type": "string",
@@ -847,6 +856,31 @@ const docTemplate = `{
                 "stream": {
                     "type": "boolean",
                     "example": false
+                }
+            }
+        },
+        "httpserver.SwaggerSelectionPath": {
+            "type": "object",
+            "properties": {
+                "points": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                }
+            }
+        },
+        "httpserver.SwaggerSelectionRegion": {
+            "type": "object",
+            "properties": {
+                "holes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpserver.SwaggerSelectionPath"
+                    }
+                },
+                "outer": {
+                    "$ref": "#/definitions/httpserver.SwaggerSelectionPath"
                 }
             }
         },

@@ -38,22 +38,24 @@ type ImageGenerationInput struct {
 
 // ImageEditInput 表示图片编辑用例已经完成协议校验后的输入。
 type ImageEditInput struct {
-	RequestID      string
-	ClientKey      clientkey.Key
-	PublicModel    string
-	Prompt         string
-	ImageURLs      []string
-	Count          int
-	Size           string
-	AspectRatio    string
-	Resolution     string
-	Quality        string
-	ResponseFormat string
-	Streaming      bool
-	PartialImages  int
-	Method         string
-	Path           string
-	Headers        map[string][]string
+	RequestID        string
+	ClientKey        clientkey.Key
+	PublicModel      string
+	Prompt           string
+	ImageURLs        []string
+	MaskURL          string
+	SelectionRegions []provider.ImageSelectionRegion
+	Count            int
+	Size             string
+	AspectRatio      string
+	Resolution       string
+	Quality          string
+	ResponseFormat   string
+	Streaming        bool
+	PartialImages    int
+	Method           string
+	Path             string
+	Headers          map[string][]string
 }
 
 type imageProviderSupport func(accountdomain.Provider) bool
@@ -90,7 +92,8 @@ func (s *Service) EditImage(ctx context.Context, input ImageEditInput) (*Result,
 		}
 		return adapter.EditImage(executionCtx, provider.ImageEditRequest{
 			Credential: credential, Model: upstream, Prompt: input.Prompt,
-			ImageURLs: input.ImageURLs, Count: input.Count, Size: input.Size, AspectRatio: input.AspectRatio,
+			ImageURLs: input.ImageURLs, MaskURL: input.MaskURL, SelectionRegions: input.SelectionRegions,
+			Count: input.Count, Size: input.Size, AspectRatio: input.AspectRatio,
 			Resolution: input.Resolution, Quality: input.Quality, ResponseFormat: input.ResponseFormat,
 			Streaming: input.Streaming, PartialImages: input.PartialImages,
 		})

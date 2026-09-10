@@ -732,6 +732,40 @@ func TestImageEditAcceptsOfficialJSONShape(t *testing.T) {
 	if multipartRecorder.Code != http.StatusUnsupportedMediaType || !strings.Contains(multipartRecorder.Body.String(), "application/json") {
 		t.Fatalf("multipart status=%d body=%s", multipartRecorder.Code, multipartRecorder.Body.String())
 	}
+
+	validMask := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(`{
+		"model":"grok-imagine-image-edit","prompt":"换成黑洞",
+		"image":{"url":"https://example.com/input.png"},
+		"mask":{"url":"data:image/png;base64,AAAA"}
+	}`))
+	validMask.Header.Set("Content-Type", "application/json")
+	validMaskRecorder := httptest.NewRecorder()
+	router.ServeHTTP(validMaskRecorder, validMask)
+	if validMaskRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("valid mask status=%d body=%s", validMaskRecorder.Code, validMaskRecorder.Body.String())
+	}
+
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "mask missing url", body: `{"model":"grok-imagine-image-edit","prompt":"test","image":{"url":"https://example.com/a.png"},"mask":{}}`, want: "mask 必须提供有效 url"},
+		{name: "mask file_id", body: `{"model":"grok-imagine-image-edit","prompt":"test","image":{"url":"https://example.com/a.png"},"mask":{"file_id":"file_1"}}`, want: "mask.file_id"},
+		{name: "mask and regions", body: `{"model":"grok-imagine-image-edit","prompt":"test","image":{"url":"https://example.com/a.png"},"mask":{"url":"https://example.com/m.png"},"selection_regions":[{"outer":{"points":[0,0,1,0,1,1]}}]}`, want: "不能同时提供"},
+		{name: "odd points", body: `{"model":"grok-imagine-image-edit","prompt":"test","image":{"url":"https://example.com/a.png"},"selection_regions":[{"outer":{"points":[0,0,1]}}]}`, want: "偶数"},
+		{name: "too few points", body: `{"model":"grok-imagine-image-edit","prompt":"test","image":{"url":"https://example.com/a.png"},"selection_regions":[{"outer":{"points":[0,0,1,0]}}]}`, want: "至少需要 3 个点"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), test.want) {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
 }
 
 func TestImageGenerationValidatesOpenAIPartialImages(t *testing.T) {

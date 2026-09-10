@@ -150,20 +150,31 @@ type imageEditJSONImage struct {
 	FileID string `json:"file_id"`
 }
 
+type imageEditJSONPath struct {
+	Points []float64 `json:"points"`
+}
+
+type imageEditJSONRegion struct {
+	Outer imageEditJSONPath   `json:"outer"`
+	Holes []imageEditJSONPath `json:"holes"`
+}
+
 type imageEditJSONRequest struct {
-	Model          string               `json:"model"`
-	Prompt         string               `json:"prompt"`
-	Image          *imageEditJSONImage  `json:"image"`
-	Images         []imageEditJSONImage `json:"images"`
-	Count          *int                 `json:"n"`
-	Size           string               `json:"size"`
-	AspectRatio    string               `json:"aspect_ratio"`
-	Resolution     string               `json:"resolution"`
-	Quality        string               `json:"quality"`
-	ResponseFormat string               `json:"response_format"`
-	StorageOptions json.RawMessage      `json:"storage_options"`
-	Stream         bool                 `json:"stream"`
-	PartialImages  *int                 `json:"partial_images"`
+	Model            string                `json:"model"`
+	Prompt           string                `json:"prompt"`
+	Image            *imageEditJSONImage   `json:"image"`
+	Images           []imageEditJSONImage  `json:"images"`
+	Mask             *imageEditJSONImage   `json:"mask"`
+	SelectionRegions []imageEditJSONRegion `json:"selection_regions"`
+	Count            *int                  `json:"n"`
+	Size             string                `json:"size"`
+	AspectRatio      string                `json:"aspect_ratio"`
+	Resolution       string                `json:"resolution"`
+	Quality          string                `json:"quality"`
+	ResponseFormat   string                `json:"response_format"`
+	StorageOptions   json.RawMessage       `json:"storage_options"`
+	Stream           bool                  `json:"stream"`
+	PartialImages    *int                  `json:"partial_images"`
 }
 
 type videoGenerationImage struct {
@@ -627,6 +638,11 @@ func (h *Handler) editImage(c *gin.Context) {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "每个 image 都必须提供有效 url")
 		return
 	}
+	maskURL, regions, err := parseImageEditMask(request.Mask, request.SelectionRegions)
+	if err != nil {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	if model == "" || prompt == "" {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "图片编辑缺少有效 model 或 prompt")
 		return
@@ -676,7 +692,8 @@ func (h *Handler) editImage(c *gin.Context) {
 	}
 	result, err := h.gateway.EditImage(c.Request.Context(), gateway.ImageEditInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model, Prompt: prompt,
-		ImageURLs: imageURLs, Count: count, Size: size, AspectRatio: aspectRatio,
+		ImageURLs: imageURLs, MaskURL: maskURL, SelectionRegions: regions,
+		Count: count, Size: size, AspectRatio: aspectRatio,
 		Resolution: resolution, Quality: quality, ResponseFormat: request.ResponseFormat,
 		Streaming: request.Stream, PartialImages: partialImages,
 		Method: c.Request.Method, Path: c.Request.URL.Path, Headers: c.Request.Header.Clone(),
@@ -686,6 +703,83 @@ func (h *Handler) editImage(c *gin.Context) {
 		return
 	}
 	h.writeResult(c, result, request.Stream, streamProtocolImage)
+}
+
+func parseImageEditMask(mask *imageEditJSONImage, regions []imageEditJSONRegion) (string, []provider.ImageSelectionRegion, error) {
+	hasMask := mask != nil
+	hasRegions := len(regions) > 0
+	if hasMask && hasRegions {
+		return "", nil, fmt.Errorf("mask 与 selection_regions 不能同时提供")
+	}
+	if hasMask {
+		if strings.TrimSpace(mask.FileID) != "" {
+			return "", nil, fmt.Errorf("当前暂不支持 mask.file_id，请使用 mask.url")
+		}
+		url := strings.TrimSpace(mask.URL)
+		if url == "" {
+			return "", nil, fmt.Errorf("mask 必须提供有效 url")
+		}
+		return url, nil, nil
+	}
+	if !hasRegions {
+		return "", nil, nil
+	}
+	parsed := make([]provider.ImageSelectionRegion, 0, len(regions))
+	for i, region := range regions {
+		outer, err := normalizeSelectionPath(region.Outer.Points)
+		if err != nil {
+			return "", nil, fmt.Errorf("selection_regions[%d].outer: %w", i, err)
+		}
+		item := provider.ImageSelectionRegion{Outer: outer}
+		for j, hole := range region.Holes {
+			points, err := normalizeSelectionPath(hole.Points)
+			if err != nil {
+				return "", nil, fmt.Errorf("selection_regions[%d].holes[%d]: %w", i, j, err)
+			}
+			item.Holes = append(item.Holes, points)
+		}
+		parsed = append(parsed, item)
+	}
+	return "", parsed, nil
+}
+
+func normalizeSelectionPath(points []float64) ([]float64, error) {
+	if len(points)%2 != 0 {
+		return nil, fmt.Errorf("points 长度必须是偶数")
+	}
+	if len(points) < 6 {
+		return nil, fmt.Errorf("至少需要 3 个点")
+	}
+	out := make([]float64, 0, len(points))
+	for i := 0; i+1 < len(points); i += 2 {
+		x, y := points[i], points[i+1]
+		if math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(y) || math.IsInf(y, 0) {
+			return nil, fmt.Errorf("points 包含非有限数值")
+		}
+		x = clampSelectionCoord(x)
+		y = clampSelectionCoord(y)
+		if n := len(out); n >= 2 && out[n-2] == x && out[n-1] == y {
+			continue
+		}
+		out = append(out, x, y)
+	}
+	if len(out) >= 4 && out[0] == out[len(out)-2] && out[1] == out[len(out)-1] {
+		out = out[:len(out)-2]
+	}
+	if len(out) < 6 {
+		return nil, fmt.Errorf("至少需要 3 个点")
+	}
+	return out, nil
+}
+
+func clampSelectionCoord(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 func requestIdentity(c *gin.Context) (clientkeydomain.Key, string, bool) {
