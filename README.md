@@ -316,7 +316,7 @@ Authorization: Bearer g2a_xxx_xxx
 | `GET`, `DELETE` | `/v1/responses/{id}` | Read or delete a stored response |
 | `POST` | `/v1/chat/completions` | Chat Completions JSON/SSE |
 | `POST` | `/v1/messages` | Anthropic Messages JSON/SSE |
-| `POST` | `/v1/images/generations`, `/v1/images/edits` | Generate or edit images |
+| `POST` | `/v1/images/generations`, `/v1/images/edits` | Generate or edit images; Web region edits accept JSON `mask.url` or `selection_regions` |
 | `POST`, `GET` | `/v1/videos/*` | Create and inspect video jobs |
 | `POST` | `/v1/tts`, `/v1/audio/speech`, `/v1/audio/tasks` | Synthesize speech |
 | `POST` | `/v1/stt`, `/v1/audio/transcriptions` | Transcribe audio |

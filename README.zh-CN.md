@@ -314,7 +314,7 @@ Authorization: Bearer g2a_xxx_xxx
 | `GET`、`DELETE` | `/v1/responses/{id}` | 查询或删除 stored response |
 | `POST` | `/v1/chat/completions` | Chat Completions JSON/SSE |
 | `POST` | `/v1/messages` | Anthropic Messages JSON/SSE |
-| `POST` | `/v1/images/generations`、`/v1/images/edits` | 生成或编辑图片 |
+| `POST` | `/v1/images/generations`、`/v1/images/edits` | 生成或编辑图片；Web 精确编辑可传 JSON `mask.url` 或 `selection_regions` |
 | `POST`、`GET` | `/v1/videos/*` | 创建和查询视频任务 |
 | `POST` | `/v1/tts`、`/v1/audio/speech`、`/v1/audio/tasks` | 语音合成 |
 | `POST` | `/v1/stt`、`/v1/audio/transcriptions` | 音频转录 |

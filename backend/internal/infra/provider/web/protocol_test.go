@@ -853,7 +853,7 @@ func TestImageEditRejectsUnsupportedCountAndStreamingOptions(t *testing.T) {
 
 func TestBuildImageEditPayloadMatchesCapturedMediaGenInputShape(t *testing.T) {
 	assets := []string{"metadata-1", "metadata-2"}
-	payload := buildImageEditPayload("改成兔子", assets, "1:1")
+	payload := buildImageEditPayload("改成兔子", assets, "1:1", nil)
 	mediaGenInput, ok := payload["mediaGenInput"].(map[string]any)
 	if !ok {
 		t.Fatalf("mediaGenInput = %#v", payload["mediaGenInput"])
@@ -874,11 +874,35 @@ func TestBuildImageEditPayloadMatchesCapturedMediaGenInputShape(t *testing.T) {
 			t.Fatalf("legacy field %q leaked into payload: %#v", field, payload)
 		}
 	}
-	withoutRatio := buildImageEditPayload("edit", []string{"metadata-1"}, "")
+	withoutRatio := buildImageEditPayload("edit", []string{"metadata-1"}, "", nil)
+	if _, exists := imageToImage["selectionRegions"]; exists {
+		t.Fatalf("empty selectionRegions leaked into payload: %#v", imageToImage)
+	}
 	mediaGenInput = withoutRatio["mediaGenInput"].(map[string]any)
 	imageToImage = mediaGenInput["imageToImage"].(map[string]any)
 	if _, exists := imageToImage["aspectRatio"]; exists {
 		t.Fatalf("empty aspect ratio leaked into payload: %#v", imageToImage)
+	}
+}
+
+func TestBuildImageEditPayloadIncludesSelectionRegions(t *testing.T) {
+	regions := []provider.ImageSelectionRegion{{
+		Outer: []float64{0.1, 0.2, 0.3, 0.2, 0.3, 0.4, 0.1, 0.4},
+		Holes: [][]float64{{0.15, 0.25, 0.2, 0.25, 0.2, 0.3}},
+	}}
+	payload := buildImageEditPayload("换成黑洞", []string{"asset-1"}, "", regions)
+	imageToImage := payload["mediaGenInput"].(map[string]any)["imageToImage"].(map[string]any)
+	got, ok := imageToImage["selectionRegions"].([]map[string]any)
+	if !ok || len(got) != 1 {
+		t.Fatalf("selectionRegions = %#v", imageToImage["selectionRegions"])
+	}
+	outer := got[0]["outer"].(map[string]any)["points"].([]float64)
+	if !slices.Equal(outer, regions[0].Outer) {
+		t.Fatalf("outer = %#v", outer)
+	}
+	holes := got[0]["holes"].([]map[string]any)
+	if len(holes) != 1 || !slices.Equal(holes[0]["points"].([]float64), regions[0].Holes[0]) {
+		t.Fatalf("holes = %#v", holes)
 	}
 }
 
