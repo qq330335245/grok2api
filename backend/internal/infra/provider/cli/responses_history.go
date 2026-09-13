@@ -25,6 +25,9 @@ func (c *responsesToolCompatibility) normalizeInputItems(items []any) ([]any, []
 		if itemType == "" && strings.TrimSpace(stringField(item, "role")) != "" {
 			itemType = "message"
 		}
+		if strings.EqualFold(itemType, "compaction") {
+			itemType = "compaction"
+		}
 		switch itemType {
 		case "message":
 			converted, err := c.normalizeMessageInput(item, param)
@@ -51,8 +54,15 @@ func (c *responsesToolCompatibility) normalizeInputItems(items []any) ([]any, []
 			converted := sanitizeReasoningInput(item)
 			c.changed = true
 			rewritten = append(rewritten, converted)
+		case "compaction":
+			// Never forward opaque compact state. expandGatewayCompactionHistory should
+			// already have rewritten owned g2a blobs; anything still typed compaction is
+			// foreign or mutated and Build will 400 on it.
+			c.changed = true
+			c.addWarning("foreign_compaction_omitted")
+			rewritten = append(rewritten, foreignCompactionBoundaryMessage())
 		case "file_search_call", "web_search_call", "image_generation_call", "code_interpreter_call",
-			"shell_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response", "mcp_call", "compaction":
+			"shell_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response", "mcp_call":
 			// These types are part of the native Grok Build Responses InputItem contract.
 			// Remove only Codex-private fields and nulls; native calls must not degrade to text.
 			converted := sanitizeNativeHistoryInput(item, itemType)
@@ -309,8 +319,6 @@ func sanitizeNativeHistoryInput(item map[string]any, itemType string) map[string
 		fields = []string{"approval_request_id", "approve", "id", "reason"}
 	case "mcp_call":
 		fields = []string{"arguments", "id", "name", "server_label", "approval_request_id", "error", "output", "status"}
-	case "compaction":
-		fields = []string{"id", "encrypted_content"}
 	}
 	converted := copyNonNullHistoryFields(item, fields...)
 	converted["type"] = itemType

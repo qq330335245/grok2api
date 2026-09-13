@@ -348,9 +348,8 @@ func TestRecoverReasoningDecodeFailurePreservesRateLimitAfterSessionReset(t *tes
 }
 
 // TestCompactionBlobDecodeFailureRecoversWithoutOpaqueBlob covers Claude Code
-// replaying a large opaque compact state that Build rejects. Expand already
-// replaces foreign blobs when NormalizeBody is on; this path skips expand and
-// still recovers by stripping the blob on the same account.
+// replaying a large opaque compact state. Expand now also runs after reasoning
+// replay, so even NormalizeBody=false must drop the blob before the first Build call.
 func TestCompactionBlobDecodeFailureRecoversWithoutOpaqueBlob(t *testing.T) {
 	adapter, encrypted := newReasoningRecoveryTestAdapter(t)
 	compactionBlob := strings.Repeat("x", 4<<20)
@@ -369,29 +368,18 @@ func TestCompactionBlobDecodeFailureRecoversWithoutOpaqueBlob(t *testing.T) {
 	}
 	var calls atomic.Int32
 	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		call := calls.Add(1)
+		calls.Add(1)
 		data, readErr := io.ReadAll(request.Body)
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		switch call {
-		case 1:
-			if len(data) < 4<<20 || !strings.Contains(string(data), `"encrypted_content"`) {
-				t.Fatalf("compact blob was not forwarded: size=%d", len(data))
-			}
-			return jsonHTTPResponse(request, http.StatusBadRequest, `{"error":"Could not decode the compaction blob. Ensure it is unmodified from the compact response."}`), nil
-		case 2:
-			if strings.Contains(string(data), compactionBlob) || strings.Contains(string(data), `"type":"compaction"`) {
-				t.Fatalf("opaque compact blob leaked into recovery retry: size=%d", len(data))
-			}
-			if !strings.Contains(string(data), "压缩后继续执行") {
-				t.Fatalf("portable user turn missing from recovery retry: %s", data)
-			}
-			return jsonHTTPResponse(request, http.StatusOK, `{"id":"resp_ok","status":"completed","output":[]}`), nil
-		default:
-			t.Fatalf("unexpected recovery retry %d", call)
-			return nil, nil
+		if strings.Contains(string(data), compactionBlob) || strings.Contains(string(data), `"type":"compaction"`) {
+			t.Fatalf("opaque compact blob reached Build: size=%d", len(data))
 		}
+		if !strings.Contains(string(data), "压缩后继续执行") {
+			t.Fatalf("portable user turn missing: %s", data)
+		}
+		return jsonHTTPResponse(request, http.StatusOK, `{"id":"resp_ok","status":"completed","output":[]}`), nil
 	})
 
 	response, err := adapter.ForwardResponse(t.Context(), provider.ResponseResourceRequest{
@@ -408,9 +396,8 @@ func TestCompactionBlobDecodeFailureRecoversWithoutOpaqueBlob(t *testing.T) {
 	}
 	defer response.Body.Close()
 	responseBody, _ := io.ReadAll(response.Body)
-	warnings := response.Header.Get("X-Grok2API-Compatibility-Warnings")
-	if calls.Load() != 2 || response.StatusCode != http.StatusOK || !strings.Contains(warnings, "compaction_blob_stripped") || strings.Contains(warnings, "reasoning_encrypted_content_downgraded") {
-		t.Fatalf("calls=%d status=%d warnings=%q body=%s", calls.Load(), response.StatusCode, warnings, responseBody)
+	if calls.Load() != 1 || response.StatusCode != http.StatusOK {
+		t.Fatalf("calls=%d status=%d body=%s", calls.Load(), response.StatusCode, responseBody)
 	}
 }
 
@@ -456,6 +443,91 @@ func TestRecoverReasoningDecodeFailurePreservesOriginalWhenRetryFails(t *testing
 	data, _ := io.ReadAll(response.Body)
 	if calls.Load() != 2 || response.StatusCode != http.StatusBadRequest || !strings.Contains(string(data), "Could not decrypt") || !strings.Contains(response.Header.Get("X-Grok2API-Compatibility-Warnings"), "reasoning_recovery_failed") {
 		t.Fatalf("calls=%d status=%d headers=%#v body=%s", calls.Load(), response.StatusCode, response.Header, data)
+	}
+}
+
+func TestCompactionBlobDecodeFailureResetsSessionWhenNoCompactItem(t *testing.T) {
+	adapter, encrypted := newReasoningRecoveryTestAdapter(t)
+	var calls atomic.Int32
+	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		call := calls.Add(1)
+		data, readErr := io.ReadAll(request.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		switch call {
+		case 1:
+			if request.Header.Get("x-grok-session-id") == "" || !strings.Contains(string(data), `"encrypted_content":"opaque-reasoning"`) || !strings.Contains(string(data), `"prompt_cache_key":"pi-session"`) {
+				t.Fatalf("first request missing session cipher: headers=%v body=%s", request.Header, data)
+			}
+			return jsonHTTPResponse(request, http.StatusBadRequest, `{"code":"invalid-argument","error":"Could not decode the compaction blob. Ensure it is unmodified from the compact response."}`), nil
+		case 2:
+			if request.Header.Get("x-grok-session-id") != "" {
+				t.Fatalf("session header leaked into reset retry: %q", request.Header.Get("x-grok-session-id"))
+			}
+			if strings.Contains(string(data), "opaque-reasoning") || strings.Contains(string(data), `"prompt_cache_key"`) {
+				t.Fatalf("reset retry still carried opaque state: %s", data)
+			}
+			if !strings.Contains(string(data), "continue after compact") {
+				t.Fatalf("user turn missing from reset retry: %s", data)
+			}
+			return jsonHTTPResponse(request, http.StatusOK, `{"id":"resp_ok","status":"completed","output":[]}`), nil
+		default:
+			t.Fatalf("unexpected recovery retry %d", call)
+			return nil, nil
+		}
+	})
+	response, err := adapter.ForwardResponse(t.Context(), provider.ResponseResourceRequest{
+		Credential:     account.Credential{ID: 1, Provider: account.ProviderBuild, EncryptedAccessToken: encrypted},
+		Method:         http.MethodPost,
+		Path:           "/responses",
+		Model:          "grok-4.5",
+		PromptCacheKey: "pi-session",
+		NormalizeBody:  false,
+		Body:           []byte(`{"model":"grok-4.5","prompt_cache_key":"pi-session","input":[{"type":"reasoning","summary":[],"encrypted_content":"opaque-reasoning"},{"role":"user","content":"continue after compact"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	warnings := response.Header.Get("X-Grok2API-Compatibility-Warnings")
+	if calls.Load() != 2 || response.StatusCode != http.StatusOK || !strings.Contains(warnings, "reasoning_session_reset") || !strings.Contains(warnings, "reasoning_encrypted_content_downgraded") || strings.Contains(warnings, "reasoning_recovery_failed") {
+		t.Fatalf("calls=%d status=%d warnings=%q body=%s", calls.Load(), response.StatusCode, warnings, body)
+	}
+}
+
+func TestCompactionBlobDecodeFailureStripsNestedContentParts(t *testing.T) {
+	adapter, encrypted := newReasoningRecoveryTestAdapter(t)
+	var calls atomic.Int32
+	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		data, readErr := io.ReadAll(request.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if strings.Contains(string(data), "nested-compact-blob") || strings.Contains(string(data), `"type":"compaction"`) {
+			t.Fatalf("nested compact blob reached Build: %s", data)
+		}
+		if !strings.Contains(string(data), "keep going") {
+			t.Fatalf("portable user text missing: %s", data)
+		}
+		return jsonHTTPResponse(request, http.StatusOK, `{"id":"resp_ok","status":"completed","output":[]}`), nil
+	})
+	response, err := adapter.ForwardResponse(t.Context(), provider.ResponseResourceRequest{
+		Credential:    account.Credential{ID: 1, Provider: account.ProviderBuild, EncryptedAccessToken: encrypted},
+		Method:        http.MethodPost,
+		Path:          "/responses",
+		Model:         "grok-4.5",
+		NormalizeBody: false,
+		Body:          []byte(`{"model":"grok-4.5","input":[{"type":"message","role":"user","content":[{"type":"compaction","encrypted_content":"nested-compact-blob"},{"type":"input_text","text":"keep going"}]}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if calls.Load() != 1 || response.StatusCode != http.StatusOK {
+		t.Fatalf("calls=%d status=%d warnings=%q", calls.Load(), response.StatusCode, response.Header.Get("X-Grok2API-Compatibility-Warnings"))
 	}
 }
 

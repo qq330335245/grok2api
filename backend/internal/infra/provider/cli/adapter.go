@@ -339,6 +339,9 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	// plane.
 	replayBaseBody := body
 	body, replayKey := a.applyReasoningReplay(ctx, request, replayBaseBody, base)
+	if expanded, _, _, expandErr := expandGatewayCompactionHistory(body, a.compaction, request.PromptCacheKey); expandErr == nil {
+		body = expanded
+	}
 	resp, reqURL, err := a.doResponseRequest(ctx, request, accessToken, body, base)
 	if err != nil {
 		return nil, err
@@ -363,6 +366,9 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 			fallbackBase := a.fallbackBaseURL()
 			if fallbackBase != "" && !strings.EqualFold(fallbackBase, base) {
 				fallbackBody, fallbackReplayKey := a.applyReasoningReplay(ctx, request, replayBaseBody, fallbackBase)
+				if expanded, _, _, expandErr := expandGatewayCompactionHistory(fallbackBody, a.compaction, request.PromptCacheKey); expandErr == nil {
+					fallbackBody = expanded
+				}
 				fallbackCtx := infraegress.WithPhysicalCallStage(ctx, "plane_fallback")
 				fallbackResp, fallbackURL, fallbackErr := a.doResponseRequest(fallbackCtx, request, accessToken, fallbackBody, fallbackBase)
 				if fallbackErr == nil {

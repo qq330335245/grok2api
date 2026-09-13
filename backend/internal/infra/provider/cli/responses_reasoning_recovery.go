@@ -109,7 +109,7 @@ func (a *Adapter) recoverReasoningDecodeFailure(
 		return original, requestURL, reasoningRecoveryOutcome{}
 	}
 	if isCompactionBlobDecodeFailure(errorBody) {
-		return a.recoverCompactionBlobDecodeFailure(ctx, request, accessToken, body, base, original, requestURL, errorBody, truncated)
+		return a.recoverCompactionBlobDecodeFailure(ctx, request, accessToken, body, base, original, requestURL, errorBody, truncated, replayKey)
 	}
 	if !isReasoningDecodeFailure(errorBody) {
 		return original, requestURL, reasoningRecoveryOutcome{}
@@ -213,7 +213,6 @@ func (a *Adapter) recoverReasoningDecodeFailure(
 	return retry, retryURL, out
 }
 
-
 func (a *Adapter) recoverCompactionBlobDecodeFailure(
 	ctx context.Context,
 	request provider.ResponseResourceRequest,
@@ -224,43 +223,93 @@ func (a *Adapter) recoverCompactionBlobDecodeFailure(
 	requestURL string,
 	errorBody []byte,
 	truncated bool,
+	replayKey string,
 ) (*http.Response, string, reasoningRecoveryOutcome) {
-	portableBody, changed := replaceCompactionItemsWithBoundary(body)
-	if !changed {
-		return original, requestURL, reasoningRecoveryOutcome{}
+	if a.replay != nil && replayKey != "" {
+		a.replay.Clear(ctx, request.Model, replayKey)
 	}
 	out := reasoningRecoveryOutcome{}
 	out.recordHidden("compaction_blob_rejected", "pending_recovery", original, errorBody, truncated)
-	retry, retryURL, retryErr := a.retryCompactionBlobRecovery(ctx, request, accessToken, portableBody, base)
+
+	current := body
+	portableBody, strippedItems := replaceCompactionItemsWithBoundary(current)
+	if strippedItems {
+		retry, retryURL, retryErr := a.retryCompactionBlobRecovery(ctx, request, accessToken, portableBody, base)
+		if retryErr != nil {
+			a.logReasoningRecovery(request, base, "compaction_blob", "transport_failed", 0, retryErr)
+			out.setFirstResult("transport_failed")
+			out.failed = true
+			return original, requestURL, out
+		}
+		if err := normalizeGzipResponse(retry); err != nil {
+			_ = retry.Body.Close()
+			a.logReasoningRecovery(request, base, "compaction_blob", "response_decode_failed", retry.StatusCode, err)
+			out.setFirstResult("response_decode_failed")
+			out.failed = true
+			return original, requestURL, out
+		}
+		if isHTTPSuccess(retry.StatusCode) || retry.StatusCode == http.StatusTooManyRequests {
+			_ = original.Body.Close()
+			result := "recovered_compaction_blob_stripped"
+			if retry.StatusCode == http.StatusTooManyRequests {
+				result = "replaced_by_rate_limit"
+			}
+			a.logReasoningRecovery(request, base, "compaction_blob", result, retry.StatusCode, nil)
+			out.setFirstResult(result)
+			out.compactionBlobStripped = true
+			return retry, retryURL, out
+		}
+		retryBody, retryTrunc, inspectErr := provider.ReadDiagnosticBody(retry.Body)
+		_ = retry.Body.Close()
+		a.logReasoningRecovery(request, base, "compaction_blob", "retry_rejected", retry.StatusCode, inspectErr)
+		out.recordHidden("compaction_blob_retry", "retry_rejected", retry, retryBody, retryTrunc)
+		if !isCompactionBlobDecodeFailure(retryBody) {
+			out.setFirstResult("retry_rejected")
+			out.failed = true
+			return original, requestURL, out
+		}
+		current = portableBody
+	}
+
+	fallbackBody, encChanged := stripReasoningEncryptedContent(current)
+	fallbackBody = removePromptCacheKey(fallbackBody)
+	if !strippedItems && !encChanged && strings.TrimSpace(request.PromptCacheKey) == "" {
+		out.setFirstResult("no_opaque_compaction")
+		out.failed = true
+		return original, requestURL, out
+	}
+	retry, retryURL, retryErr := a.retryReasoningRecovery(ctx, request, accessToken, fallbackBody, base, true)
 	if retryErr != nil {
-		a.logReasoningRecovery(request, base, "compaction_blob", "transport_failed", 0, retryErr)
-		out.setFirstResult("transport_failed")
+		a.logReasoningRecovery(request, base, "compaction_blob_session_reset", "transport_failed", 0, retryErr)
+		out.setFirstResult("session_reset_transport_failed")
 		out.failed = true
 		return original, requestURL, out
 	}
 	if err := normalizeGzipResponse(retry); err != nil {
 		_ = retry.Body.Close()
-		a.logReasoningRecovery(request, base, "compaction_blob", "response_decode_failed", retry.StatusCode, err)
-		out.setFirstResult("response_decode_failed")
+		a.logReasoningRecovery(request, base, "compaction_blob_session_reset", "response_decode_failed", retry.StatusCode, err)
+		out.setFirstResult("session_reset_response_decode_failed")
 		out.failed = true
 		return original, requestURL, out
 	}
-	if isHTTPSuccess(retry.StatusCode) || retry.StatusCode == http.StatusTooManyRequests {
+	if retry.StatusCode == http.StatusTooManyRequests || isHTTPSuccess(retry.StatusCode) {
 		_ = original.Body.Close()
-		result := "recovered_compaction_blob_stripped"
+		result := "recovered_compaction_session_reset"
 		if retry.StatusCode == http.StatusTooManyRequests {
 			result = "replaced_by_rate_limit"
 		}
-		a.logReasoningRecovery(request, base, "compaction_blob", result, retry.StatusCode, nil)
+		a.logReasoningRecovery(request, base, "compaction_blob_session_reset", result, retry.StatusCode, nil)
 		out.setFirstResult(result)
-		out.compactionBlobStripped = true
+		out.compactionBlobStripped = strippedItems
+		out.encryptedContentDowngraded = encChanged
+		out.sessionReset = true
 		return retry, retryURL, out
 	}
 	retryBody, retryTrunc, inspectErr := provider.ReadDiagnosticBody(retry.Body)
 	_ = retry.Body.Close()
-	a.logReasoningRecovery(request, base, "compaction_blob", "retry_rejected", retry.StatusCode, inspectErr)
-	out.recordHidden("compaction_blob_retry", "retry_rejected", retry, retryBody, retryTrunc)
-	out.setFirstResult("retry_rejected")
+	a.logReasoningRecovery(request, base, "compaction_blob_session_reset", "retry_rejected", retry.StatusCode, inspectErr)
+	out.recordHidden("compaction_blob_session_reset", "retry_rejected", retry, retryBody, retryTrunc)
+	out.setFirstResult("session_reset_rejected")
 	out.failed = true
 	return original, requestURL, out
 }

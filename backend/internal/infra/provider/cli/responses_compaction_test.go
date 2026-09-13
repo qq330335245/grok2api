@@ -558,6 +558,59 @@ func newCompactionTestAdapter(t *testing.T) (*Adapter, string) {
 	return adapter, encrypted
 }
 
+func TestExpandGatewayCompactionHistoryRewritesNestedAndCaseFoldedBlobs(t *testing.T) {
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	codec := newGatewayCompactionCodec(cipher)
+	owned, err := codec.encode("session-1", gatewayCompactionContinuation(healthyCompactionSummary()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"input": []any{
+			map[string]any{
+				"type": "message", "role": "user",
+				"content": []any{
+					map[string]any{"type": "Compaction", "encrypted_content": "foreign-nested"},
+					map[string]any{"type": "input_text", "text": "keep me"},
+				},
+			},
+			map[string]any{"type": "compaction", "encrypted_content": owned},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expanded, foreign, drifted, err := expandGatewayCompactionHistory(body, codec, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreign != 1 || drifted != 0 || strings.Contains(string(expanded), "foreign-nested") || strings.Contains(string(expanded), owned) || strings.Contains(string(expanded), `"type":"compaction"`) || strings.Contains(string(expanded), `"type":"Compaction"`) || !strings.Contains(string(expanded), "keep me") || !strings.Contains(string(expanded), "This session is being continued") {
+		t.Fatalf("expanded=%s foreign=%d drifted=%d", expanded, foreign, drifted)
+	}
+}
+
+func TestNormalizeResponsesRequestDropsLeftoverCompactionBlobs(t *testing.T) {
+	normalized, compatibility, err := normalizeResponsesRequest([]byte(`{
+		"model":"public",
+		"input":[
+			{"type":"Compaction","encrypted_content":"opaque-history-blob"},
+			{"type":"message","role":"user","content":"continue"}
+		]
+	}`), "grok-4.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(normalized), "opaque-history-blob") || strings.Contains(string(normalized), `"type":"compaction"`) || strings.Contains(string(normalized), `"type":"Compaction"`) || !strings.Contains(string(normalized), "cannot be decoded by Grok Build") {
+		t.Fatalf("normalized=%s", normalized)
+	}
+	if compatibility == nil || !strings.Contains(compatibility.warningHeader(), "foreign_compaction_omitted") {
+		t.Fatalf("warnings=%q", compatibility.warningHeader())
+	}
+}
+
 func compactionProviderRequest(encrypted string) provider.ResponseResourceRequest {
 	return provider.ResponseResourceRequest{
 		Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, EncryptedAccessToken: encrypted},
