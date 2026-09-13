@@ -124,6 +124,19 @@ func (a *Adapter) forwardGatewayCompactionWithPolicy(
 		}
 		modelCatalogChanged := a.modelCatalogChanged(request.Credential.ID, resp.Header.Get("x-models-etag"))
 		if !isHTTPSuccess(resp.StatusCode) {
+			errorBody, truncated, readErr := provider.ReadDiagnosticBody(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				return nil, readErr
+			}
+			resp = cloneBufferedResponse(resp, errorBody, truncated)
+			if resp.StatusCode == http.StatusBadRequest && !truncated && isCompactionBlobDecodeFailure(errorBody) && attempt < maxAttempts {
+				if next, changed := replaceCompactionItemsWithBoundary(body); changed {
+					body = next
+				}
+				upstreamRequest.PromptCacheKey = ""
+				continue
+			}
 			result, transient, err := gatewayCompactionHTTPFailure(resp, reqURL, modelCatalogChanged, warnings)
 			if err != nil {
 				return nil, err

@@ -104,38 +104,102 @@ func expandGatewayCompactionHistory(body []byte, codec *gatewayCompactionCodec, 
 	}
 	foreign := 0
 	drifted := 0
-	changed := false
-	for index, raw := range items {
-		item, ok := raw.(map[string]any)
-		if !ok || stringField(item, "type") != "compaction" {
-			continue
+	rewritten, changed := mapInputObjects(items, func(item map[string]any, nested bool) (map[string]any, bool) {
+		summary, isCompaction, owned, sessionDrifted, err := classifyCompactionBlob(item, codec, session)
+		if !isCompaction {
+			return nil, false
 		}
-		blob, _ := item["encrypted_content"].(string)
-		summary, owned, sessionDrifted, err := codec.decode(session, blob)
 		if err != nil {
 			foreign++
-			items[index] = compatibilityBoundaryMessage("A prior compacted context could not be decoded by this gateway instance. Continue from the retained conversation messages.")
-			changed = true
-			continue
+			return compactionReplacement(nested, compatibilityBoundaryMessage("A prior compacted context could not be decoded by this gateway instance. Continue from the retained conversation messages.")), true
 		}
 		if !owned {
 			foreign++
-			items[index] = foreignCompactionBoundaryMessage()
-			changed = true
-			continue
+			return compactionReplacement(nested, foreignCompactionBoundaryMessage()), true
 		}
-		items[index] = gatewayCompactionSummaryMessage(summary)
 		if sessionDrifted {
 			drifted++
 		}
-		changed = true
-	}
+		return compactionReplacement(nested, gatewayCompactionSummaryMessage(summary)), true
+	})
 	if !changed {
 		return body, 0, 0, nil
 	}
-	payload["input"] = items
+	payload["input"] = rewritten
 	encoded, err := json.Marshal(payload)
 	return encoded, foreign, drifted, err
+}
+
+func classifyCompactionBlob(item map[string]any, codec *gatewayCompactionCodec, session string) (summary string, isCompaction bool, owned bool, drifted bool, err error) {
+	blob, _ := item["encrypted_content"].(string)
+	if !isCompactionType(item) && !strings.HasPrefix(blob, gatewayCompactionPrefix) {
+		return "", false, false, false, nil
+	}
+	summary, owned, drifted, err = codec.decode(session, blob)
+	return summary, true, owned, drifted, err
+}
+
+func isCompactionType(item map[string]any) bool {
+	return strings.EqualFold(strings.TrimSpace(stringField(item, "type")), "compaction")
+}
+
+func compactionReplacement(nested bool, message map[string]any) map[string]any {
+	if !nested {
+		return message
+	}
+	text := "A compacted context created by another provider cannot be decoded by Grok Build. Continue from the retained conversation messages."
+	if content, ok := message["content"].([]any); ok && len(content) > 0 {
+		if part, ok := content[0].(map[string]any); ok {
+			if value := stringField(part, "text"); value != "" {
+				text = value
+			}
+		}
+	}
+	return map[string]any{"type": "input_text", "text": text}
+}
+
+func mapInputObjects(items []any, rewrite func(item map[string]any, nested bool) (map[string]any, bool)) ([]any, bool) {
+	rewritten := make([]any, len(items))
+	changed := false
+	for index, raw := range items {
+		rewritten[index] = raw
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if next, ok := rewrite(item, false); ok {
+			rewritten[index] = next
+			changed = true
+			continue
+		}
+		content, ok := item["content"].([]any)
+		if !ok {
+			continue
+		}
+		nextContent := make([]any, len(content))
+		contentChanged := false
+		for partIndex, partRaw := range content {
+			nextContent[partIndex] = partRaw
+			part, ok := partRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			next, ok := rewrite(part, true)
+			if !ok {
+				continue
+			}
+			nextContent[partIndex] = next
+			contentChanged = true
+		}
+		if !contentChanged {
+			continue
+		}
+		cloned := cloneJSONObject(item)
+		cloned["content"] = nextContent
+		rewritten[index] = cloned
+		changed = true
+	}
+	return rewritten, changed
 }
 
 // prepareGatewayCompactionSample mirrors Grok Build full-replace
@@ -250,7 +314,6 @@ func gatewayCompactionContinuation(raw string) string {
 	return "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n" + cleanGatewayCompactionSummary(raw)
 }
 
-
 func foreignCompactionBoundaryMessage() map[string]any {
 	return compatibilityBoundaryMessage("A compacted context created by another provider cannot be decoded by Grok Build. Continue from the retained conversation messages.")
 }
@@ -264,19 +327,18 @@ func replaceCompactionItemsWithBoundary(body []byte) ([]byte, bool) {
 	if !ok || len(items) == 0 {
 		return body, false
 	}
-	changed := false
-	for index, raw := range items {
-		item, ok := raw.(map[string]any)
-		if !ok || stringField(item, "type") != "compaction" {
-			continue
+	boundary := compatibilityBoundaryMessage("A prior compacted context could not be decoded by the upstream model. Continue from the retained conversation messages.")
+	rewritten, changed := mapInputObjects(items, func(item map[string]any, nested bool) (map[string]any, bool) {
+		blob, _ := item["encrypted_content"].(string)
+		if !isCompactionType(item) && !strings.HasPrefix(blob, gatewayCompactionPrefix) {
+			return nil, false
 		}
-		items[index] = compatibilityBoundaryMessage("A prior compacted context could not be decoded by the upstream model. Continue from the retained conversation messages.")
-		changed = true
-	}
+		return compactionReplacement(nested, boundary), true
+	})
 	if !changed {
 		return body, false
 	}
-	payload["input"] = items
+	payload["input"] = rewritten
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return body, false
