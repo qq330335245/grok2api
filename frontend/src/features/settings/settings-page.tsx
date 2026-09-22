@@ -502,11 +502,10 @@ export function SettingsPage() {
                   <Controller
                     control={form.control}
                     name="accounts.buildBotRiskProbeModel"
-                    render={({ field }) => (
-                      <Select
-                        value={field.value === "grok-4.6" || field.value === "grok-4.7" ? field.value : "grok-4.5"}
-                        onValueChange={field.onChange}
-                      >
+                    render={({ field }) => {
+                      const model = field.value === "grok-4.6" || field.value === "grok-4.7" || field.value === "grok-4.5" ? field.value : undefined;
+                      return (
+                      <Select key={model ?? "unset"} value={model} onValueChange={field.onChange}>
                         <SelectTrigger id="accounts-build-bot-risk-probe-model" className="w-40">
                           <SelectValue />
                         </SelectTrigger>
@@ -516,7 +515,8 @@ export function SettingsPage() {
                           <SelectItem value="grok-4.7">grok-4.7</SelectItem>
                         </SelectContent>
                       </Select>
-                    )}
+                      );
+                    }}
                   />
                 </SettingsField>
               </div>
