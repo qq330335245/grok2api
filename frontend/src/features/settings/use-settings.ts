@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -24,7 +24,7 @@ export function useSettings() {
     onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (settingsQuery.data) form.reset(toSettingsForm(settingsQuery.data.config));
   }, [form, settingsQuery.data]);
 

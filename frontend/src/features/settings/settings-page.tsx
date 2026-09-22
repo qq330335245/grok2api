@@ -503,7 +503,10 @@ export function SettingsPage() {
                     control={form.control}
                     name="accounts.buildBotRiskProbeModel"
                     render={({ field }) => (
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select
+                        value={field.value === "grok-4.6" || field.value === "grok-4.7" ? field.value : "grok-4.5"}
+                        onValueChange={field.onChange}
+                      >
                         <SelectTrigger id="accounts-build-bot-risk-probe-model" className="w-40">
                           <SelectValue />
                         </SelectTrigger>
