@@ -163,6 +163,9 @@ bootstrapAdmin:
 	if cfg.Accounts.AutoCleanReauthInterval.Value() != 10*time.Minute || cfg.Accounts.AutoCleanReauthMinAge.Value() != time.Hour {
 		t.Fatalf("accounts auto-clean defaults = %#v", cfg.Accounts)
 	}
+	if cfg.Accounts.BuildBotRiskProbeModel != "grok-4.5" {
+		t.Fatalf("bot-risk probe model default = %q", cfg.Accounts.BuildBotRiskProbeModel)
+	}
 	if !cfg.Routing.ReasoningReplayEnabled || cfg.Routing.ReasoningReplayTTL.Value() != time.Hour || cfg.Routing.ReasoningReplayMaxEntries != 10240 {
 		t.Fatalf("reasoning replay defaults = %#v", cfg.Routing)
 	}

@@ -30,6 +30,7 @@ export type SettingsConfigDTO = {
     markBuildForbiddenReauth: boolean;
     buildForbiddenReauthCodes: string[];
     excludeBuildBotFlaggedFromScheduling: boolean;
+    buildBotRiskProbeModel: "grok-4.5" | "grok-4.6" | "grok-4.7";
     autoCleanReauthEnabled: boolean;
     autoCleanReauthInterval: string;
     autoCleanReauthMinAge: string;
@@ -142,16 +143,21 @@ const settingsConfigValidator = hasShape({
     markBuildForbiddenReauth: isOptional(isBoolean),
     buildForbiddenReauthCodes: isOptional(isArrayOf(isString)),
     excludeBuildBotFlaggedFromScheduling: isOptional(isBoolean),
+    buildBotRiskProbeModel: isOptional(isString),
     autoCleanReauthEnabled: isBoolean,
     autoCleanReauthInterval: isString,
     autoCleanReauthMinAge: isString,
     autoCleanIncludeDisabled: isBoolean,
   })),
 });
+function normalizeBuildBotRiskProbeModel(value: string | undefined): SettingsConfigDTO["accounts"]["buildBotRiskProbeModel"] {
+  return value === "grok-4.6" || value === "grok-4.7" ? value : "grok-4.5";
+}
 const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
   markBuildForbiddenReauth: false,
   buildForbiddenReauthCodes: ["permission-denied"],
   excludeBuildBotFlaggedFromScheduling: false,
+  buildBotRiskProbeModel: "grok-4.5",
   autoCleanReauthEnabled: false,
   autoCleanReauthInterval: "10m",
   autoCleanReauthMinAge: "1h",
@@ -193,6 +199,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         markBuildForbiddenReauth: accounts.markBuildForbiddenReauth ?? false,
         buildForbiddenReauthCodes: accounts.buildForbiddenReauthCodes ?? ["permission-denied"],
         excludeBuildBotFlaggedFromScheduling: accounts.excludeBuildBotFlaggedFromScheduling ?? false,
+        buildBotRiskProbeModel: normalizeBuildBotRiskProbeModel(accounts.buildBotRiskProbeModel),
         autoCleanReauthEnabled: accounts.autoCleanReauthEnabled ?? false,
         autoCleanReauthInterval: accounts.autoCleanReauthInterval || "10m",
         autoCleanReauthMinAge: accounts.autoCleanReauthMinAge || "1h",

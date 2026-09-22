@@ -84,6 +84,8 @@ func TestScanThinkingSSEGoldStandard(t *testing.T) {
 type scriptedThinkingAdapter struct {
 	mu      sync.Mutex
 	calls   []string
+	models  []string
+	bodies  []string
 	sse     []string
 	status  int
 	errBody []byte
@@ -97,6 +99,8 @@ func (a *scriptedThinkingAdapter) ForwardResponse(_ context.Context, request pro
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls = append(a.calls, request.Credential.EgressIdentity)
+	a.models = append(a.models, request.Model)
+	a.bodies = append(a.bodies, string(request.Body))
 	if a.fail != nil {
 		return nil, a.fail
 	}
@@ -371,5 +375,34 @@ func TestInspectBuildBotRiskPropagatesFlagToLinked(t *testing.T) {
 		if latest.BuildBotFlagSource != 0 {
 			t.Fatalf("peer %s still flagged=%#v", peer.Provider, latest)
 		}
+	}
+}
+
+func TestProbeThinkingUsesConfiguredModel(t *testing.T) {
+	thinking := "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"ok\"}\n\n"
+	adapter := &scriptedThinkingAdapter{sse: []string{thinking, thinking}}
+	service := NewService(nil, nil, nil, nil, provider.NewRegistry(adapter), nil, nil)
+	service.UpdateBuildBotRiskProbeModel("grok-4.7")
+	credential := accountdomain.Credential{ID: 1, Provider: accountdomain.ProviderBuild, EgressIdentity: "acc"}
+	if _, _, _, _, err := service.probeThinkingOnStickyIdentity(context.Background(), credential, nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.models) != 1 || adapter.models[0] != "grok-4.7" || !strings.Contains(adapter.bodies[0], `"model":"grok-4.7"`) {
+		t.Fatalf("models=%v body=%s", adapter.models, adapter.bodies)
+	}
+	service.UpdateBuildBotRiskProbeModel("grok-9")
+	if _, _, _, _, err := service.probeThinkingOnStickyIdentity(context.Background(), credential, nil, 2); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.models[1] != "grok-4.7" {
+		t.Fatalf("invalid model replaced the configured probe: %v", adapter.models)
+	}
+	service.UpdateBuildBotRiskProbeModel("")
+	adapter.sse = []string{thinking}
+	if _, _, _, _, err := service.probeThinkingOnStickyIdentity(context.Background(), credential, nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.models[2] != "grok-4.5" {
+		t.Fatalf("empty model did not restore the default: %v", adapter.models)
 	}
 }

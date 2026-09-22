@@ -339,10 +339,12 @@ type AccountsConfig struct {
 	// ExcludeBuildBotFlaggedFromScheduling removes Build accounts with bot_flag_source/bfs in {1,2}
 	// from scheduling only. Linked Web/Console accounts are unaffected.
 	ExcludeBuildBotFlaggedFromScheduling bool
-	AutoCleanReauthEnabled               bool
-	AutoCleanReauthInterval              Duration
-	AutoCleanReauthMinAge                Duration
-	AutoCleanIncludeDisabled             bool
+	// BuildBotRiskProbeModel selects the thinking model used by bot-risk detection.
+	BuildBotRiskProbeModel   string
+	AutoCleanReauthEnabled   bool
+	AutoCleanReauthInterval  Duration
+	AutoCleanReauthMinAge    Duration
+	AutoCleanIncludeDisabled bool
 }
 
 type Secrets struct {
@@ -757,6 +759,9 @@ func (c Config) Validate() error {
 	if len(c.Accounts.BuildForbiddenReauthCodes) == 0 {
 		return errors.New("accounts.buildForbiddenReauthCodes 至少需要一个错误码")
 	}
+	if _, ok := settingsdomain.NormalizeBuildBotRiskProbeModel(c.Accounts.BuildBotRiskProbeModel); !ok {
+		return errors.New("accounts.buildBotRiskProbeModel 只能是 grok-4.5、grok-4.6 或 grok-4.7")
+	}
 	return nil
 }
 
@@ -1034,6 +1039,7 @@ func defaultConfig() Config {
 			MarkBuildForbiddenReauth:             false,
 			BuildForbiddenReauthCodes:            []string{"permission-denied"},
 			ExcludeBuildBotFlaggedFromScheduling: false,
+			BuildBotRiskProbeModel:               settingsdomain.DefaultBuildBotRiskProbeModel,
 			AutoCleanReauthEnabled:               false,
 			AutoCleanReauthInterval:              Duration(10 * time.Minute),
 			AutoCleanReauthMinAge:                Duration(time.Hour),

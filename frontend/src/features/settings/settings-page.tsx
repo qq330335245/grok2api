@@ -494,6 +494,28 @@ export function SettingsPage() {
                     )}
                   />
                 </SettingsField>
+                <SettingsField
+                  controlId="accounts-build-bot-risk-probe-model"
+                  label={t("settings.accounts.buildBotRiskProbeModel")}
+                  description={t("settings.accounts.buildBotRiskProbeModelHelp")}
+                >
+                  <Controller
+                    control={form.control}
+                    name="accounts.buildBotRiskProbeModel"
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger id="accounts-build-bot-risk-probe-model" className="w-40">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="grok-4.5">grok-4.5</SelectItem>
+                          <SelectItem value="grok-4.6">grok-4.6</SelectItem>
+                          <SelectItem value="grok-4.7">grok-4.7</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </SettingsField>
               </div>
             </SettingsSection>
 

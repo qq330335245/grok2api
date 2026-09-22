@@ -145,16 +145,20 @@ type AccountsConfig struct {
 	BuildForbiddenReauthCodes []string
 	// ExcludeBuildBotFlaggedFromScheduling drops bot-risk Build accounts from scheduling only.
 	ExcludeBuildBotFlaggedFromScheduling bool
-	AutoCleanReauthEnabled               bool
-	AutoCleanReauthInterval              string
-	AutoCleanReauthMinAge                string
-	AutoCleanIncludeDisabled             bool
+	// BuildBotRiskProbeModel is the thinking model used by bot-risk detection.
+	BuildBotRiskProbeModel   string
+	AutoCleanReauthEnabled   bool
+	AutoCleanReauthInterval  string
+	AutoCleanReauthMinAge    string
+	AutoCleanIncludeDisabled bool
 	// MarkBuildForbiddenReauthProvided preserves the value when an older management client omits the field.
 	MarkBuildForbiddenReauthProvided bool
 	// BuildForbiddenReauthCodesProvided preserves the configured codes when an older management client omits the field.
 	BuildForbiddenReauthCodesProvided bool
 	// ExcludeBuildBotFlaggedFromSchedulingProvided preserves the value when an older management client omits the field.
 	ExcludeBuildBotFlaggedFromSchedulingProvided bool
+	// BuildBotRiskProbeModelProvided preserves the probe model when an older management client omits the field.
+	BuildBotRiskProbeModelProvided bool
 }
 
 // EditableConfig 聚合管理端允许修改的运行参数。
@@ -483,6 +487,9 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 		base.Accounts.BuildForbiddenReauthCodes = append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...)
 	}
 	base.Accounts.ExcludeBuildBotFlaggedFromScheduling = value.Accounts.ExcludeBuildBotFlaggedFromScheduling
+	if model, ok := settingsdomain.NormalizeBuildBotRiskProbeModel(value.Accounts.BuildBotRiskProbeModel); ok && strings.TrimSpace(value.Accounts.BuildBotRiskProbeModel) != "" {
+		base.Accounts.BuildBotRiskProbeModel = model
+	}
 	if value.AntiDegrade != nil {
 		base.QualityGuard.AntiDegrade = config.AntiDegradeConfig{
 			Enabled: value.AntiDegrade.Enabled, Mode: value.AntiDegrade.Mode, Providers: append([]string(nil), value.AntiDegrade.Providers...),
@@ -563,6 +570,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			MarkBuildForbiddenReauth:             value.Accounts.MarkBuildForbiddenReauth,
 			BuildForbiddenReauthCodes:            append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...),
 			ExcludeBuildBotFlaggedFromScheduling: value.Accounts.ExcludeBuildBotFlaggedFromScheduling,
+			BuildBotRiskProbeModel:               value.Accounts.BuildBotRiskProbeModel,
 			AutoCleanReauthEnabled:               value.Accounts.AutoCleanReauthEnabled,
 			AutoCleanReauthInterval:              value.Accounts.AutoCleanReauthInterval.Value(),
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
@@ -694,6 +702,13 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		}
 		if input.Accounts.ExcludeBuildBotFlaggedFromSchedulingProvided {
 			next.Accounts.ExcludeBuildBotFlaggedFromScheduling = input.Accounts.ExcludeBuildBotFlaggedFromScheduling
+		}
+		if input.Accounts.BuildBotRiskProbeModelProvided {
+			model, ok := settingsdomain.NormalizeBuildBotRiskProbeModel(input.Accounts.BuildBotRiskProbeModel)
+			if !ok {
+				return config.Config{}, fmt.Errorf("accounts.buildBotRiskProbeModel 只能是 grok-4.5、grok-4.6 或 grok-4.7")
+			}
+			next.Accounts.BuildBotRiskProbeModel = model
 		}
 		next.Accounts.AutoCleanReauthEnabled = input.Accounts.AutoCleanReauthEnabled
 		next.Accounts.AutoCleanIncludeDisabled = input.Accounts.AutoCleanIncludeDisabled
@@ -849,9 +864,11 @@ func toEditable(cfg config.Config) EditableConfig {
 			MarkBuildForbiddenReauth:                     cfg.Accounts.MarkBuildForbiddenReauth,
 			BuildForbiddenReauthCodes:                    append([]string(nil), cfg.Accounts.BuildForbiddenReauthCodes...),
 			ExcludeBuildBotFlaggedFromScheduling:         cfg.Accounts.ExcludeBuildBotFlaggedFromScheduling,
+			BuildBotRiskProbeModel:                       editableBuildBotRiskProbeModel(cfg.Accounts.BuildBotRiskProbeModel),
 			MarkBuildForbiddenReauthProvided:             true,
 			BuildForbiddenReauthCodesProvided:            true,
 			ExcludeBuildBotFlaggedFromSchedulingProvided: true,
+			BuildBotRiskProbeModelProvided:               true,
 			AutoCleanReauthEnabled:                       cfg.Accounts.AutoCleanReauthEnabled,
 			AutoCleanReauthInterval:                      cfg.Accounts.AutoCleanReauthInterval.String(),
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
@@ -860,6 +877,14 @@ func toEditable(cfg config.Config) EditableConfig {
 		AccountsProvided: true,
 		AntiDegrade:      toEditableAntiDegrade(cfg.QualityGuard.AntiDegrade),
 	}
+}
+
+func editableBuildBotRiskProbeModel(value string) string {
+	model, ok := settingsdomain.NormalizeBuildBotRiskProbeModel(value)
+	if !ok {
+		return settingsdomain.DefaultBuildBotRiskProbeModel
+	}
+	return model
 }
 
 func toEditableAntiDegrade(cfg config.AntiDegradeConfig) AntiDegradeConfig {

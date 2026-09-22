@@ -20,7 +20,6 @@ import (
 
 const (
 	botRiskProbeAttempts  = 2
-	botRiskProbeModel     = "grok-4.5"
 	botRiskProbePrompt    = "Think step by step before answering. What is 17 multiplied by 19? Give the integer result."
 	botRiskAttemptTimeout = 75 * time.Second
 )
@@ -320,13 +319,14 @@ func (s *Service) probeThinkingOnStickyIdentity(ctx context.Context, value accou
 	attemptCtx, trace := infraegress.WithTrace(infraegress.WithExitObservation(infraegress.WithStickyLeasePreference(attemptCtx)))
 	probe := value
 	probe.EgressIdentity = identity
-	body := []byte(fmt.Sprintf(`{"model":%q,"input":%q,"stream":true,"reasoning":{"effort":"high"}}`, botRiskProbeModel, botRiskProbePrompt))
+	model := s.buildBotRiskProbeModel()
+	body := []byte(fmt.Sprintf(`{"model":%q,"input":%q,"stream":true,"reasoning":{"effort":"high"}}`, model, botRiskProbePrompt))
 	response, err := adapter.ForwardResponse(attemptCtx, provider.ResponseResourceRequest{
 		Credential:    probe,
 		Billing:       billing,
 		Method:        http.MethodPost,
 		Path:          "/responses",
-		Model:         botRiskProbeModel,
+		Model:         model,
 		Body:          body,
 		NormalizeBody: true,
 		Streaming:     true,
@@ -386,7 +386,7 @@ func (s *Service) finishBotRiskQuotaRejection(ctx context.Context, value account
 			item.Reason = err.Error()
 		}
 	case rejection.ModelQuotaExhausted:
-		item.Reason = fmt.Sprintf("模型 %s 额度已满", botRiskProbeModel)
+		item.Reason = fmt.Sprintf("模型 %s 额度已满", s.buildBotRiskProbeModel())
 		if err := s.markBuildDetectModelQuotaExhausted(ctx, value, item.Reason); err != nil {
 			item.Reason = err.Error()
 		}

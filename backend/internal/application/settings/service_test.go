@@ -858,6 +858,73 @@ func TestUpdateWithoutAccountsPreservesCurrentAutoCleanConfig(t *testing.T) {
 	}
 }
 
+func TestUpdateBuildBotRiskProbeModelRoundTrip(t *testing.T) {
+	cfg := testConfig(t)
+	var applied config.Config
+	service := NewService(cfg, time.Time{}, 0, &runtimeSettingsRepositoryStub{}, nil, func(next config.Config) { applied = next })
+	input := service.Get().Config
+	input.Accounts.BuildBotRiskProbeModel = " grok-4.7 "
+	input.Accounts.BuildBotRiskProbeModelProvided = true
+	snapshot, err := service.Update(context.Background(), service.Get().Revision, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.Accounts.BuildBotRiskProbeModel != "grok-4.7" || snapshot.Config.Accounts.BuildBotRiskProbeModel != "grok-4.7" {
+		t.Fatalf("probe model = applied %q snapshot %q", applied.Accounts.BuildBotRiskProbeModel, snapshot.Config.Accounts.BuildBotRiskProbeModel)
+	}
+}
+
+func TestUpdateRejectsUnknownBuildBotRiskProbeModel(t *testing.T) {
+	cfg := testConfig(t)
+	service := NewService(cfg, time.Time{}, 0, &runtimeSettingsRepositoryStub{}, nil, nil)
+	input := service.Get().Config
+	input.Accounts.BuildBotRiskProbeModel = "grok-4"
+	input.Accounts.BuildBotRiskProbeModelProvided = true
+	if _, err := service.Update(context.Background(), service.Get().Revision, input); err == nil {
+		t.Fatal("unknown bot-risk probe model was accepted")
+	}
+}
+
+func TestUpdateWithoutBuildBotRiskProbeModelPreservesCurrent(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts.BuildBotRiskProbeModel = "grok-4.6"
+	var applied config.Config
+	service := NewService(cfg, time.Time{}, 0, &runtimeSettingsRepositoryStub{}, nil, func(next config.Config) { applied = next })
+	input := service.Get().Config
+	input.Accounts.BuildBotRiskProbeModel = "grok-4.5"
+	input.Accounts.BuildBotRiskProbeModelProvided = false
+	input.Server.MaxConcurrentRequests++
+	if _, err := service.Update(context.Background(), 0, input); err != nil {
+		t.Fatal(err)
+	}
+	if applied.Accounts.BuildBotRiskProbeModel != "grok-4.6" {
+		t.Fatalf("probe model changed by legacy update: %q", applied.Accounts.BuildBotRiskProbeModel)
+	}
+}
+
+func TestLoadPersistedKeepsDefaultBotRiskProbeModelForOlderPayload(t *testing.T) {
+	cfg := testConfig(t)
+	value := toDomainConfig(cfg)
+	value.Accounts.BuildBotRiskProbeModel = ""
+	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
+	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Accounts.BuildBotRiskProbeModel != "grok-4.5" {
+		t.Fatalf("older payload probe model = %q", loaded.Accounts.BuildBotRiskProbeModel)
+	}
+	value.Accounts.BuildBotRiskProbeModel = "grok-4.6"
+	repository.value = value
+	loaded, _, _, err = LoadPersisted(context.Background(), cfg, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Accounts.BuildBotRiskProbeModel != "grok-4.6" {
+		t.Fatalf("persisted probe model = %q", loaded.Accounts.BuildBotRiskProbeModel)
+	}
+}
+
 func TestUpdateWithoutBuildForbiddenFieldPreservesCurrentPolicy(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Accounts.MarkBuildForbiddenReauth = true

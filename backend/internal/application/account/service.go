@@ -18,6 +18,7 @@ import (
 
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
@@ -461,6 +462,7 @@ type Service struct {
 	autoCleanRevision      uint64
 	autoCleanWake          chan struct{}
 	excludeBuildBotFlagged bool
+	botRiskProbeModel      string
 	buildBotFlagCache      *resultcache.Cache[string, []uint64]
 	logger                 *slog.Logger
 	now                    func() time.Time
@@ -685,6 +687,31 @@ func (s *Service) UpdateExcludeBuildBotFlaggedFromScheduling(value bool) {
 	s.autoCleanMu.Lock()
 	s.excludeBuildBotFlagged = value
 	s.autoCleanMu.Unlock()
+}
+
+// UpdateBuildBotRiskProbeModel hot-updates the thinking model used by bot-risk probes.
+// Unknown values are ignored so a bad update cannot change an in-flight default.
+func (s *Service) UpdateBuildBotRiskProbeModel(value string) {
+	model, ok := settingsdomain.NormalizeBuildBotRiskProbeModel(value)
+	if !ok || s == nil {
+		return
+	}
+	s.autoCleanMu.Lock()
+	s.botRiskProbeModel = model
+	s.autoCleanMu.Unlock()
+}
+
+func (s *Service) buildBotRiskProbeModel() string {
+	if s == nil {
+		return settingsdomain.DefaultBuildBotRiskProbeModel
+	}
+	s.autoCleanMu.RLock()
+	model := s.botRiskProbeModel
+	s.autoCleanMu.RUnlock()
+	if model == "" {
+		return settingsdomain.DefaultBuildBotRiskProbeModel
+	}
+	return model
 }
 
 func (s *Service) excludeBuildBotFlaggedFromSchedulingEnabled() bool {

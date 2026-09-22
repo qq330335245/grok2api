@@ -1,6 +1,9 @@
 package settings
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	DefaultBuildResponseHeaderTimeout = 5 * time.Minute
@@ -19,6 +22,8 @@ const (
 	DefaultWebFreeVideoDurationCap = 6
 	MinWebFreeVideoDurationCap     = 1
 	MaxWebFreeVideoDurationCap     = 15
+
+	DefaultBuildBotRiskProbeModel = "grok-4.5"
 )
 
 func NormalizeWebFreeVideoDurationCap(value int) int {
@@ -26,6 +31,19 @@ func NormalizeWebFreeVideoDurationCap(value int) int {
 		return DefaultWebFreeVideoDurationCap
 	}
 	return value
+}
+
+// NormalizeBuildBotRiskProbeModel accepts the bot-risk thinking probe models.
+// An empty value is the historical default grok-4.5. Unknown values are rejected.
+func NormalizeBuildBotRiskProbeModel(value string) (string, bool) {
+	switch strings.TrimSpace(value) {
+	case "", DefaultBuildBotRiskProbeModel:
+		return DefaultBuildBotRiskProbeModel, true
+	case "grok-4.6", "grok-4.7":
+		return strings.TrimSpace(value), true
+	default:
+		return "", false
+	}
 }
 
 // Config 表示可跨重启持久化并支持热加载的网关运行参数。
@@ -167,6 +185,9 @@ type AccountsConfig struct {
 	AutoCleanReauthMinAge time.Duration
 	// AutoCleanIncludeDisabled 为 true 时，reauth 清理时包含 enabled=false 的账号。
 	AutoCleanIncludeDisabled bool
+	// BuildBotRiskProbeModel 是风控检测和反降智号级确认使用的思考模型。
+	// 空值表示历史默认 grok-4.5；仅允许 grok-4.5、grok-4.6、grok-4.7。
+	BuildBotRiskProbeModel string
 }
 
 // AntiDegradeConfig is the persisted overlay for in-process ExitIP anti-degrade.

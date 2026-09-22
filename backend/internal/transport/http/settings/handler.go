@@ -135,6 +135,7 @@ type accountsConfigDTO struct {
 	MarkBuildForbiddenReauth             *bool     `json:"markBuildForbiddenReauth,omitempty"`
 	BuildForbiddenReauthCodes            *[]string `json:"buildForbiddenReauthCodes,omitempty"`
 	ExcludeBuildBotFlaggedFromScheduling *bool     `json:"excludeBuildBotFlaggedFromScheduling,omitempty"`
+	BuildBotRiskProbeModel               *string   `json:"buildBotRiskProbeModel,omitempty"`
 	AutoCleanReauthEnabled               bool      `json:"autoCleanReauthEnabled"`
 	AutoCleanReauthInterval              string    `json:"autoCleanReauthInterval"`
 	AutoCleanReauthMinAge                string    `json:"autoCleanReauthMinAge"`
@@ -259,9 +260,11 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 			MarkBuildForbiddenReauth:                     boolValue(value.Accounts.MarkBuildForbiddenReauth),
 			BuildForbiddenReauthCodes:                    stringSliceValue(value.Accounts.BuildForbiddenReauthCodes),
 			ExcludeBuildBotFlaggedFromScheduling:         boolValue(value.Accounts.ExcludeBuildBotFlaggedFromScheduling),
+			BuildBotRiskProbeModel:                       optionalString(value.Accounts.BuildBotRiskProbeModel),
 			MarkBuildForbiddenReauthProvided:             value.Accounts.MarkBuildForbiddenReauth != nil,
 			BuildForbiddenReauthCodesProvided:            value.Accounts.BuildForbiddenReauthCodes != nil,
 			ExcludeBuildBotFlaggedFromSchedulingProvided: value.Accounts.ExcludeBuildBotFlaggedFromScheduling != nil,
+			BuildBotRiskProbeModelProvided:               value.Accounts.BuildBotRiskProbeModel != nil,
 			AutoCleanReauthEnabled:                       value.Accounts.AutoCleanReauthEnabled,
 			AutoCleanReauthInterval:                      value.Accounts.AutoCleanReauthInterval,
 			AutoCleanReauthMinAge:                        value.Accounts.AutoCleanReauthMinAge,
@@ -338,6 +341,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				MarkBuildForbiddenReauth:             boolPointer(config.Accounts.MarkBuildForbiddenReauth),
 				BuildForbiddenReauthCodes:            stringSlicePointer(config.Accounts.BuildForbiddenReauthCodes),
 				ExcludeBuildBotFlaggedFromScheduling: boolPointer(config.Accounts.ExcludeBuildBotFlaggedFromScheduling),
+				BuildBotRiskProbeModel:               stringPointer(config.Accounts.BuildBotRiskProbeModel),
 				AutoCleanReauthEnabled:               config.Accounts.AutoCleanReauthEnabled,
 				AutoCleanReauthInterval:              config.Accounts.AutoCleanReauthInterval,
 				AutoCleanReauthMinAge:                config.Accounts.AutoCleanReauthMinAge,

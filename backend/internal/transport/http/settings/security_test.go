@@ -173,6 +173,26 @@ func TestSettingsResponseIncludesBuildForbiddenCodes(t *testing.T) {
 	}
 }
 
+func TestLegacySettingsRequestPreservesBotRiskProbeModelWhenOmitted(t *testing.T) {
+	var dto settingsConfigDTO
+	if err := json.Unmarshal([]byte(`{"accounts":{"autoCleanReauthEnabled":false,"autoCleanReauthInterval":"10m","autoCleanReauthMinAge":"1h","autoCleanIncludeDisabled":false}}`), &dto); err != nil {
+		t.Fatal(err)
+	}
+	input := dto.toApplication()
+	if !input.AccountsProvided || input.Accounts.BuildBotRiskProbeModelProvided {
+		t.Fatalf("omitted probe model was treated as an explicit update: %#v", input.Accounts)
+	}
+}
+
+func TestSettingsResponseIncludesBotRiskProbeModel(t *testing.T) {
+	response := newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{
+		Accounts: settingsapp.AccountsConfig{BuildBotRiskProbeModel: "grok-4.7"},
+	}})
+	if response.Config.Accounts == nil || response.Config.Accounts.BuildBotRiskProbeModel == nil || *response.Config.Accounts.BuildBotRiskProbeModel != "grok-4.7" {
+		t.Fatalf("probe model = %#v", response.Config.Accounts)
+	}
+}
+
 func TestLegacySettingsRequestMayOmitSegmentedSelector(t *testing.T) {
 	var dto settingsConfigDTO
 	if err := json.Unmarshal([]byte(`{"routing":{"stickyTTL":"1h"}}`), &dto); err != nil {
