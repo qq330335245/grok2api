@@ -37,6 +37,7 @@ type configDTO struct {
 	Enabled                bool     `json:"enabled"`
 	Mode                   string   `json:"mode"`
 	Providers              []string `json:"providers"`
+	DisabledModels         []string `json:"disabledModels"`
 	ThinkingMinOutput      int      `json:"thinkingMinOutput"`
 	DensityWindow          string   `json:"densityWindow"`
 	DensityMaxAccounts     int      `json:"densityMaxAccounts"`
@@ -232,7 +233,8 @@ func collectAccountIDs(snapshot antidegrade.Status) []uint64 {
 func configToDTO(cfg antidegrade.Config) configDTO {
 	cfg = cfg.Normalize()
 	return configDTO{
-		Enabled: cfg.Enabled, Mode: cfg.Mode, Providers: append([]string(nil), cfg.Providers...), ThinkingMinOutput: int(cfg.ThinkingMinOutput),
+		Enabled: cfg.Enabled, Mode: cfg.Mode, Providers: append([]string(nil), cfg.Providers...),
+		DisabledModels: append([]string{}, cfg.DisabledModels...), ThinkingMinOutput: int(cfg.ThinkingMinOutput),
 		DensityWindow: formatDuration(cfg.DensityWindow), DensityMaxAccounts: cfg.DensityMaxAccounts,
 		DirtyIPCooldown: formatDuration(cfg.DirtyIPCooldown), FarmIPCooldown: formatDuration(cfg.FarmIPCooldown),
 		MaxIPRetries: cfg.MaxIPRetries, AccountIPFailThreshold: cfg.AccountIPFailThreshold,
@@ -247,7 +249,8 @@ func dtoToSettings(value configDTO) (settingsapp.AntiDegradeConfig, error) {
 		mode = antidegrade.ModeEnforce
 	}
 	return settingsapp.AntiDegradeConfig{
-		Enabled: value.Enabled, Mode: mode, Providers: append([]string(nil), value.Providers...), ThinkingMinOutput: value.ThinkingMinOutput,
+		Enabled: value.Enabled, Mode: mode, Providers: append([]string(nil), value.Providers...),
+		DisabledModels: append([]string(nil), value.DisabledModels...), ThinkingMinOutput: value.ThinkingMinOutput,
 		DensityWindow: value.DensityWindow, DensityMaxAccounts: value.DensityMaxAccounts,
 		DirtyIPCooldown: value.DirtyIPCooldown, FarmIPCooldown: value.FarmIPCooldown,
 		MaxIPRetries: value.MaxIPRetries, AccountIPFailThreshold: value.AccountIPFailThreshold,

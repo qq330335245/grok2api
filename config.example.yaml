@@ -189,6 +189,8 @@ qualityGuard:
     # / grok_web later to hold and quarantine those channels too.
     providers:
       - grok_build
+    # Public model IDs that skip anti-degrade. Empty means every model is on.
+    disabledModels: []
     thinkingMinOutput: 32
     densityWindow: 15m
     densityMaxAccounts: 5

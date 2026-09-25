@@ -1080,7 +1080,13 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	holdCfg := s.qualityRetryConfig()
 	officialQualityRetry := holdCfg.Enabled
 	anti := s.antiDegradeCtl()
-	antiActive := anti != nil && anti.ActiveFor(route.Provider)
+	antiRequest := func(provider accountdomain.Provider) bool {
+		return anti != nil && anti.ActiveForRequest(provider, input.PublicModel)
+	}
+	antiRecords := func(provider accountdomain.Provider) bool {
+		return anti != nil && anti.Enabled() && anti.AppliesTo(provider) && anti.AppliesToModel(input.PublicModel)
+	}
+	antiActive := antiRequest(route.Provider)
 	stickyOwnership := ownership
 	if antiActive {
 		holdCfg.Enabled = true
@@ -1099,7 +1105,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	var noExitFailovers int
 	var peekedStreamedThinking bool
 	noteAntiMiss := func(credential accountdomain.Credential, usedNode uint64) {
-		if anti == nil || !anti.ActiveFor(credential.Provider) {
+		if !antiRequest(credential.Provider) {
 			return
 		}
 		anti.OnMissingThinking(ctx, credential, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
@@ -1390,7 +1396,7 @@ attemptLoop:
 		}
 		excluded[lease.Credential.ID] = true
 		attemptEgressNodeID = 0
-		if anti != nil && anti.ActiveFor(lease.Credential.Provider) && input.ForcedAccountID == 0 {
+		if antiRequest(lease.Credential.Provider) && input.ForcedAccountID == 0 {
 			if anti.AccountQuarantined(lease.Credential.ID) {
 				lease.Release()
 				antiDegradePin = 0
@@ -1784,13 +1790,13 @@ attemptLoop:
 				if antiDegradeRetryMiss(antiDegradePin, peekedStreamedThinking) {
 					verdict = QualityWithhold
 				}
-				if verdict == QualityWithhold && anti != nil && anti.ActiveFor(credential.Provider) {
+				if verdict == QualityWithhold && antiRequest(credential.Provider) {
 					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 					excludeAntiDegradeNode(ctx, anti, excludedEgressNodes, usedNode)
 					noteAntiMiss(credential, usedNode)
 				}
 				hasNextAccount := qualityAccountAttempts < holdCfg.MaxAttempts
-				if anti != nil && anti.ActiveFor(credential.Provider) && antiDegradePin != 0 {
+				if antiRequest(credential.Provider) && antiDegradePin != 0 {
 					// Same-account ExitIP retry is still in progress.
 				} else {
 					hasNextAccount = hasNextAccount && attemptPolicy.hasNext(attempt)
@@ -1800,12 +1806,12 @@ attemptLoop:
 				}
 				commit := CommitQualityHold(verdict, qualityAccountAttempts-1, holdCfg.MaxAttempts, hasNextAccount, holdCfg.OnExhausted)
 				if verdict == QualityWithhold {
-					if anti == nil || !anti.ActiveFor(credential.Provider) {
+					if !antiRequest(credential.Provider) {
 						if officialQualityRetry {
 							s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, holdCfg.AccountCooldown)
 						}
 					}
-				} else if verdict == QualityDeliver && anti != nil && anti.Enabled() && anti.AppliesTo(credential.Provider) {
+				} else if verdict == QualityDeliver && antiRecords(credential.Provider) {
 					usedNode := usedEgressNodeID(egressTrace, route.Provider, attemptEgressNodeID, credential.EgressNodeID)
 					anti.OnSuccess(credential.ID, usedNode, anti.ExitIPForAccount(ctx, usedNode, credential.ID))
 				}

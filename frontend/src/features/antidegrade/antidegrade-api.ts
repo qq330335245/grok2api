@@ -5,6 +5,7 @@ export type AntiDegradeConfigDTO = {
   enabled: boolean;
   mode: "observe" | "enforce";
   providers: string[];
+  disabledModels?: string[];
   thinkingMinOutput: number;
   densityWindow: string;
   densityMaxAccounts: number;
@@ -67,6 +68,7 @@ const configValidator = hasShape({
   enabled: isBoolean,
   mode: isOneOf("observe", "enforce"),
   providers: isOptional(isArrayOf(isString)),
+  disabledModels: isOptional(isArrayOf(isString)),
   thinkingMinOutput: isNumber,
   densityWindow: isString,
   densityMaxAccounts: isNumber,

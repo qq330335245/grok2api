@@ -300,6 +300,7 @@ type AntiDegradeConfig struct {
 	Enabled                bool     `yaml:"enabled"`
 	Mode                   string   `yaml:"mode"`
 	Providers              []string `yaml:"providers"`
+	DisabledModels         []string `yaml:"disabledModels"`
 	ThinkingMinOutput      int      `yaml:"thinkingMinOutput"`
 	DensityWindow          Duration `yaml:"densityWindow"`
 	DensityMaxAccounts     int      `yaml:"densityMaxAccounts"`

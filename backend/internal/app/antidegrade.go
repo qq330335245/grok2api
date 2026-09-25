@@ -17,6 +17,7 @@ func antiDegradeRuntime(value config.AntiDegradeConfig) antidegrade.Config {
 		Enabled:                value.Enabled,
 		Mode:                   value.Mode,
 		Providers:              append([]string(nil), value.Providers...),
+		DisabledModels:         append([]string(nil), value.DisabledModels...),
 		ThinkingMinOutput:      int64(value.ThinkingMinOutput),
 		DensityWindow:          value.DensityWindow.Value(),
 		DensityMaxAccounts:     value.DensityMaxAccounts,

@@ -316,6 +316,29 @@ func TestAppliesToDefaultsToBuildOnly(t *testing.T) {
 	}
 }
 
+func TestDisabledModelsDefaultToAllOn(t *testing.T) {
+	controller := New(Config{Enabled: true, Mode: ModeEnforce, StateFile: t.TempDir() + "/l.json"}, nil, nil, nil)
+	if !controller.ActiveForRequest(accountdomain.ProviderBuild, "grok-4.7") {
+		t.Fatal("empty disable list must cover every model")
+	}
+	if !controller.AppliesToModel("") {
+		t.Fatal("an unclassified request must stay covered")
+	}
+	controller.Update(Config{
+		Enabled: true, Mode: ModeEnforce, DisabledModels: []string{" Grok-Imagine-Video ", "grok-imagine-video"},
+		StateFile: controller.config().StateFile,
+	})
+	if !controller.ActiveForRequest(accountdomain.ProviderBuild, "grok-4.5") {
+		t.Fatal("models that are not disabled must stay on")
+	}
+	if controller.ActiveForRequest(accountdomain.ProviderBuild, "grok-imagine-video") || controller.AppliesToModel("GROK-IMAGINE-VIDEO") {
+		t.Fatal("disabled public model must skip anti-degrade, case-insensitively")
+	}
+	if got := controller.config().DisabledModels; len(got) != 1 || got[0] != "grok-imagine-video" {
+		t.Fatalf("disable list = %#v", got)
+	}
+}
+
 func TestAdmitKeepsBuildRetryOnBuildNodes(t *testing.T) {
 	nodes := staticNodes{
 		{ID: 3, Enabled: true, ExitIP: "104.28.215.68", Name: "console 001", Scope: "grok_console"},

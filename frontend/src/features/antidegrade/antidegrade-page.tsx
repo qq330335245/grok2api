@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { listModelGroups } from "@/entities/model/model-api";
 import { detectBuildBotFlags, updateAccountsEnabled, type BuildDetectItemDTO } from "@/features/accounts/accounts-api";
 import { DetectResultList } from "@/features/accounts/detect-result-list";
 import { clearAntiDegradeAccount, clearAntiDegradeIP, getAntiDegradeStatus, updateAntiDegradeConfig, type AntiDegradeConfigDTO, type AntiDegradeIPDTO, type AntiDegradeQuarantineDTO, type AntiDegradeStatusDTO } from "@/features/antidegrade/antidegrade-api";
@@ -25,7 +26,19 @@ const ANTI_DEGRADE_PROVIDERS = ["grok_build", "grok_console", "grok_web"] as con
 
 function withProviders(config: AntiDegradeConfigDTO): AntiDegradeConfigDTO {
   const providers = (config.providers ?? []).filter((item) => ANTI_DEGRADE_PROVIDERS.includes(item as (typeof ANTI_DEGRADE_PROVIDERS)[number]));
-  return { ...config, providers: providers.length ? providers : ["grok_build"] };
+  return { ...config, providers: providers.length ? providers : ["grok_build"], disabledModels: normalizeDisabledModels(config.disabledModels) };
+}
+
+function normalizeDisabledModels(values: string[] | undefined) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values ?? []) {
+    const item = value.trim().toLowerCase();
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    result.push(item);
+  }
+  return result;
 }
 
 export function AntidegradePage() {
@@ -91,6 +104,11 @@ export function AntidegradePage() {
             providers={withProviders(status.config).providers}
             saving={saveConfig.isPending}
             onChange={(providers) => saveConfig.mutate({ ...withProviders(status.config), providers })}
+          />
+          <ModelScopeCard
+            disabledModels={withProviders(status.config).disabledModels ?? []}
+            saving={saveConfig.isPending}
+            onChange={(disabledModels) => saveConfig.mutate({ ...withProviders(status.config), disabledModels })}
           />
           <IPLoadPanel ips={status.ips} locale={i18n.language} onClear={(exitIp) => clearIP.mutate(exitIp)} clearing={clearIP.isPending} />
           <div className="grid gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(300px,2fr)]">
@@ -182,6 +200,67 @@ function ScopeCard({
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function ModelScopeCard({
+  disabledModels, saving, onChange,
+}: {
+  disabledModels: string[];
+  saving: boolean;
+  onChange: (disabledModels: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const modelsQuery = useQuery({
+    queryKey: ["model-groups", "antidegrade"],
+    queryFn: () => listModelGroups({ page: 1, pageSize: 2000, sortBy: "publicId", sortOrder: "asc" }),
+    staleTime: 60_000,
+  });
+  const disabled = normalizeDisabledModels(disabledModels);
+  const disabledSet = new Set(disabled);
+  const catalog = [...new Set((modelsQuery.data?.items ?? []).map((group) => group.routes[0]?.publicId.trim()).filter((item): item is string => Boolean(item)))]
+    .sort((left, right) => left.localeCompare(right));
+  const extras = disabled.filter((item) => !catalog.some((id) => id.toLowerCase() === item));
+  const rows = [...catalog, ...extras];
+  const enabledCount = rows.filter((id) => !disabledSet.has(id.toLowerCase())).length;
+  const allOn = disabled.length === 0;
+  const toggle = (publicId: string, checked: boolean) => {
+    const key = publicId.trim().toLowerCase();
+    onChange(checked ? disabled.filter((item) => item !== key) : [...disabled, key]);
+  };
+  return (
+    <section className="rounded-lg bg-card px-4 py-3 sm:px-5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <h2 className="text-sm font-medium">{t("antidegrade.models")}</h2>
+          <p className="text-[11px] text-muted-foreground">{t("antidegrade.modelsHelp")}</p>
+        </div>
+        <label className="ml-auto flex items-center gap-2 text-xs">
+          <span>{t("antidegrade.modelsAll", { count: rows.length })}</span>
+          <Checkbox
+            checked={allOn ? true : enabledCount === 0 ? false : "indeterminate"}
+            disabled={saving || modelsQuery.isLoading || rows.length === 0}
+            onCheckedChange={(value) => onChange(value === true ? [] : rows.map((id) => id.toLowerCase()))}
+            aria-label={t("antidegrade.modelsAll", { count: rows.length })}
+          />
+        </label>
+      </div>
+      {modelsQuery.isLoading ? <p className="mt-3 text-xs text-muted-foreground">{t("common.loading")}</p> : null}
+      {!modelsQuery.isLoading && rows.length === 0 ? <p className="mt-3 text-xs text-muted-foreground">{t("antidegrade.modelsEmpty")}</p> : null}
+      {rows.length > 0 ? (
+        <div className="mt-3 flex max-h-52 flex-wrap gap-x-4 gap-y-2 overflow-y-auto">
+          {rows.map((publicId) => {
+            const checked = !disabledSet.has(publicId.toLowerCase());
+            return (
+              <label key={publicId} className="flex items-center gap-2 text-xs">
+                <span className="max-w-48 truncate" title={publicId}>{publicId}</span>
+                <Switch checked={checked} disabled={saving} onCheckedChange={(value) => toggle(publicId, value)} />
+              </label>
+            );
+          })}
+        </div>
+      ) : null}
     </section>
   );
 }

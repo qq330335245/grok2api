@@ -195,6 +195,7 @@ type AntiDegradeConfig struct {
 	Enabled                bool
 	Mode                   string
 	Providers              []string
+	DisabledModels         []string
 	ThinkingMinOutput      int
 	DensityWindow          time.Duration
 	DensityMaxAccounts     int

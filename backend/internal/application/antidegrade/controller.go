@@ -101,8 +101,17 @@ func (c *Controller) IsSharedExit(ctx context.Context, nodeID uint64) bool {
 	return ok && node.SharedExit
 }
 
+func (c *Controller) AppliesToModel(publicModel string) bool {
+	return c != nil && c.config().AppliesToModel(publicModel)
+}
+
 func (c *Controller) ActiveFor(provider accountdomain.Provider) bool {
 	return c.Enforce() && c.AppliesTo(provider)
+}
+
+// ActiveForRequest is the hot-path gate: channel allowlist plus per-model switch.
+func (c *Controller) ActiveForRequest(provider accountdomain.Provider, publicModel string) bool {
+	return c.ActiveFor(provider) && c.AppliesToModel(publicModel)
 }
 func (c *Controller) MaxIPRetries() int {
 	if c == nil {
