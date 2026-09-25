@@ -188,6 +188,20 @@ export function ModelsPage() {
   const visibleAccountOptions = normalizedAccountSearch
     ? accountOptions.filter((account) => account.name.toLocaleLowerCase().includes(normalizedAccountSearch) || account.id.includes(normalizedAccountSearch))
     : accountOptions;
+  const visibleSelectedCount = visibleAccountOptions.filter((account) => selectedAccountIDs.includes(account.id)).length;
+  const allVisibleSelected = visibleAccountOptions.length > 0 && visibleSelectedCount === visibleAccountOptions.length;
+
+  function toggleVisibleAccounts(checked: boolean): void {
+    const current = form.getValues("accountIds");
+    const visible = new Set(visibleAccountOptions.map((account) => account.id));
+    form.setValue(
+      "accountIds",
+      checked
+        ? [...new Set([...current, ...visible])]
+        : current.filter((id) => !visible.has(id)),
+      { shouldValidate: true },
+    );
+  }
 
   const result = useMemo(() => modelsQuery.data ? { ...modelsQuery.data, items: modelsQuery.data.items.map((group) => newModelRouteGroup(group, t)) } : undefined, [modelsQuery.data, t]);
   const pageIDs = result?.items.flatMap((group) => group.routes.map((route) => route.id)) ?? [];
@@ -385,6 +399,16 @@ export function ModelsPage() {
                         <Input className="bg-transparent pl-8 shadow-none focus-visible:bg-background/70" value={accountSearch} onChange={(event) => setAccountSearch(event.target.value)} placeholder={t("models.searchAccounts")} />
                       </div>
                       <div className="mt-1 max-h-40 overflow-y-auto overscroll-contain sm:max-h-44">
+                        {visibleAccountOptions.length > 0 ? (
+                          <label className="sticky top-0 z-10 flex h-8 cursor-pointer items-center gap-2.5 border-b bg-background/95 px-2 text-xs font-medium backdrop-blur">
+                            <Checkbox
+                              checked={allVisibleSelected ? true : visibleSelectedCount > 0 ? "indeterminate" : false}
+                              onCheckedChange={(value) => toggleVisibleAccounts(value === true)}
+                              aria-label={t("models.selectAllAccounts", { count: visibleAccountOptions.length })}
+                            />
+                            <span className="min-w-0 flex-1 truncate">{t("models.selectAllAccounts", { count: visibleAccountOptions.length })}</span>
+                          </label>
+                        ) : null}
                         {accountOptionsQuery.isPending ? <div className="flex min-h-20 items-center justify-center"><Spinner /></div> : null}
                         {accountOptionsQuery.isError ? <p className="p-3 text-center text-xs text-destructive">{accountOptionsQuery.error.message}</p> : null}
                         {!accountOptionsQuery.isPending && visibleAccountOptions.length === 0 ? <p className="p-3 text-center text-xs text-muted-foreground">{t("models.noBindableAccounts")}</p> : null}
