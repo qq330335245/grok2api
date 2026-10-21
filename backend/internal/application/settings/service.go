@@ -146,11 +146,12 @@ type AccountsConfig struct {
 	// ExcludeBuildBotFlaggedFromScheduling drops bot-risk Build accounts from scheduling only.
 	ExcludeBuildBotFlaggedFromScheduling bool
 	// BuildBotRiskProbeModel is the thinking model used by bot-risk detection.
-	BuildBotRiskProbeModel   string
-	AutoCleanReauthEnabled   bool
-	AutoCleanReauthInterval  string
-	AutoCleanReauthMinAge    string
-	AutoCleanIncludeDisabled bool
+	BuildBotRiskProbeModel    string
+	AutoDeleteConsoleUnlinked bool
+	AutoCleanReauthEnabled    bool
+	AutoCleanReauthInterval   string
+	AutoCleanReauthMinAge     string
+	AutoCleanIncludeDisabled  bool
 	// MarkBuildForbiddenReauthProvided preserves the value when an older management client omits the field.
 	MarkBuildForbiddenReauthProvided bool
 	// BuildForbiddenReauthCodesProvided preserves the configured codes when an older management client omits the field.
@@ -158,7 +159,8 @@ type AccountsConfig struct {
 	// ExcludeBuildBotFlaggedFromSchedulingProvided preserves the value when an older management client omits the field.
 	ExcludeBuildBotFlaggedFromSchedulingProvided bool
 	// BuildBotRiskProbeModelProvided preserves the probe model when an older management client omits the field.
-	BuildBotRiskProbeModelProvided bool
+	BuildBotRiskProbeModelProvided    bool
+	AutoDeleteConsoleUnlinkedProvided bool
 }
 
 // EditableConfig 聚合管理端允许修改的运行参数。
@@ -488,6 +490,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 		base.Accounts.BuildForbiddenReauthCodes = append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...)
 	}
 	base.Accounts.ExcludeBuildBotFlaggedFromScheduling = value.Accounts.ExcludeBuildBotFlaggedFromScheduling
+	base.Accounts.AutoDeleteConsoleUnlinked = value.Accounts.AutoDeleteConsoleUnlinked
 	if model, ok := settingsdomain.NormalizeBuildBotRiskProbeModel(value.Accounts.BuildBotRiskProbeModel); ok && strings.TrimSpace(value.Accounts.BuildBotRiskProbeModel) != "" {
 		base.Accounts.BuildBotRiskProbeModel = model
 	}
@@ -573,6 +576,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			BuildForbiddenReauthCodes:            append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...),
 			ExcludeBuildBotFlaggedFromScheduling: value.Accounts.ExcludeBuildBotFlaggedFromScheduling,
 			BuildBotRiskProbeModel:               value.Accounts.BuildBotRiskProbeModel,
+			AutoDeleteConsoleUnlinked:            value.Accounts.AutoDeleteConsoleUnlinked,
 			AutoCleanReauthEnabled:               value.Accounts.AutoCleanReauthEnabled,
 			AutoCleanReauthInterval:              value.Accounts.AutoCleanReauthInterval.Value(),
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
@@ -712,6 +716,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 				return config.Config{}, fmt.Errorf("accounts.buildBotRiskProbeModel 只能是 grok-4.5、grok-4.6 或 grok-4.7")
 			}
 			next.Accounts.BuildBotRiskProbeModel = model
+		}
+		if input.Accounts.AutoDeleteConsoleUnlinkedProvided {
+			next.Accounts.AutoDeleteConsoleUnlinked = input.Accounts.AutoDeleteConsoleUnlinked
 		}
 		next.Accounts.AutoCleanReauthEnabled = input.Accounts.AutoCleanReauthEnabled
 		next.Accounts.AutoCleanIncludeDisabled = input.Accounts.AutoCleanIncludeDisabled
@@ -869,10 +876,12 @@ func toEditable(cfg config.Config) EditableConfig {
 			BuildForbiddenReauthCodes:                    append([]string(nil), cfg.Accounts.BuildForbiddenReauthCodes...),
 			ExcludeBuildBotFlaggedFromScheduling:         cfg.Accounts.ExcludeBuildBotFlaggedFromScheduling,
 			BuildBotRiskProbeModel:                       editableBuildBotRiskProbeModel(cfg.Accounts.BuildBotRiskProbeModel),
+			AutoDeleteConsoleUnlinked:                    cfg.Accounts.AutoDeleteConsoleUnlinked,
 			MarkBuildForbiddenReauthProvided:             true,
 			BuildForbiddenReauthCodesProvided:            true,
 			ExcludeBuildBotFlaggedFromSchedulingProvided: true,
 			BuildBotRiskProbeModelProvided:               true,
+			AutoDeleteConsoleUnlinkedProvided:            true,
 			AutoCleanReauthEnabled:                       cfg.Accounts.AutoCleanReauthEnabled,
 			AutoCleanReauthInterval:                      cfg.Accounts.AutoCleanReauthInterval.String(),
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),

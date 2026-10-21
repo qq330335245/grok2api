@@ -341,11 +341,12 @@ type AccountsConfig struct {
 	// from scheduling only. Linked Web/Console accounts are unaffected.
 	ExcludeBuildBotFlaggedFromScheduling bool
 	// BuildBotRiskProbeModel selects the thinking model used by bot-risk detection.
-	BuildBotRiskProbeModel   string
-	AutoCleanReauthEnabled   bool
-	AutoCleanReauthInterval  Duration
-	AutoCleanReauthMinAge    Duration
-	AutoCleanIncludeDisabled bool
+	BuildBotRiskProbeModel    string
+	AutoDeleteConsoleUnlinked bool
+	AutoCleanReauthEnabled    bool
+	AutoCleanReauthInterval   Duration
+	AutoCleanReauthMinAge     Duration
+	AutoCleanIncludeDisabled  bool
 }
 
 type Secrets struct {
@@ -1041,6 +1042,7 @@ func defaultConfig() Config {
 			BuildForbiddenReauthCodes:            []string{"permission-denied"},
 			ExcludeBuildBotFlaggedFromScheduling: false,
 			BuildBotRiskProbeModel:               settingsdomain.DefaultBuildBotRiskProbeModel,
+			AutoDeleteConsoleUnlinked:            false,
 			AutoCleanReauthEnabled:               false,
 			AutoCleanReauthInterval:              Duration(10 * time.Minute),
 			AutoCleanReauthMinAge:                Duration(time.Hour),

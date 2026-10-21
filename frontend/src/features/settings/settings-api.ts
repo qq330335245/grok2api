@@ -31,6 +31,7 @@ export type SettingsConfigDTO = {
     buildForbiddenReauthCodes: string[];
     excludeBuildBotFlaggedFromScheduling: boolean;
     buildBotRiskProbeModel: "grok-4.5" | "grok-4.6" | "grok-4.7";
+    autoDeleteConsoleUnlinked: boolean;
     autoCleanReauthEnabled: boolean;
     autoCleanReauthInterval: string;
     autoCleanReauthMinAge: string;
@@ -144,6 +145,7 @@ const settingsConfigValidator = hasShape({
     buildForbiddenReauthCodes: isOptional(isArrayOf(isString)),
     excludeBuildBotFlaggedFromScheduling: isOptional(isBoolean),
     buildBotRiskProbeModel: isOptional(isString),
+    autoDeleteConsoleUnlinked: isOptional(isBoolean),
     autoCleanReauthEnabled: isBoolean,
     autoCleanReauthInterval: isString,
     autoCleanReauthMinAge: isString,
@@ -158,6 +160,7 @@ const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
   buildForbiddenReauthCodes: ["permission-denied"],
   excludeBuildBotFlaggedFromScheduling: false,
   buildBotRiskProbeModel: "grok-4.5",
+  autoDeleteConsoleUnlinked: false,
   autoCleanReauthEnabled: false,
   autoCleanReauthInterval: "10m",
   autoCleanReauthMinAge: "1h",
@@ -200,6 +203,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         buildForbiddenReauthCodes: accounts.buildForbiddenReauthCodes ?? ["permission-denied"],
         excludeBuildBotFlaggedFromScheduling: accounts.excludeBuildBotFlaggedFromScheduling ?? false,
         buildBotRiskProbeModel: normalizeBuildBotRiskProbeModel(accounts.buildBotRiskProbeModel),
+        autoDeleteConsoleUnlinked: accounts.autoDeleteConsoleUnlinked ?? false,
         autoCleanReauthEnabled: accounts.autoCleanReauthEnabled ?? false,
         autoCleanReauthInterval: accounts.autoCleanReauthInterval || "10m",
         autoCleanReauthMinAge: accounts.autoCleanReauthMinAge || "1h",
